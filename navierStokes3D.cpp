@@ -21,20 +21,26 @@
 
 using namespace std;
 
+#ifdef SINGLE
+  typedef float real;
+#else
+  typedef double real;
+#endif
+
 ifstream meshfile;
 ifstream problemFile;
 ofstream outputFile;
 ofstream outputControl;
 
-string problemNameFile, whichProblem;         // Change this line to specify the name of the problem as seen in input and output files.
+string problemNameFile, whichProblem;
 string problemName = "ProblemName.txt";
 string controlFile = "Control_Output.txt";
 string inputExtension  = ".inp";              // Change this line to specify the extension of input file (with dot).
 string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot).
 
 int name, eType, NE, NN, NGP, NEU, Ndof;
-int NCN, NENv, NENp, iterMax;
-double density, viscosity, fx, fy, tolerance;
+int NCN, NENv, NENp, nonlinearIterMax, solverIterMax;
+double density, viscosity, fx, fy, nonlinearTol, solverTol;
 int **LtoG, **velNodes, **pressureNodes;
 double **coord;
 int nBC, nVelNodes, nPressureNodes;
@@ -43,7 +49,8 @@ double axyFunc, fxyFunc;
 double **GQpoint, *GQweight;
 double **Sp, ***DSp, **Sv, ***DSv;
 double **detJacob, ****gDSp, ****gDSv;
-double **K, *F, *u, *uOld;
+real **K, *F, *u, *uOld;   // Can be float or double. K is the stiffness matrix
+                           // in full storage used Gauss Elimination solver.
 int bigNumber;
 
 double *Fe, **Ke;
@@ -55,7 +62,7 @@ double *uNodal, *vNodal, *wNodal;
 double u0, v0, w0;
 
 int **GtoL, *rowStarts, *rowStartsSmall, *colSmall, *col, **KeKMapSmall, NNZ; 
-double *val;
+real *val;
 
 void readInput();
 void gaussQuad();
@@ -63,14 +70,16 @@ void calcShape();
 void calcJacobian();
 void initGlobalSysVariables();
 void calcGlobalSys();
-void assemble(int e,double **Ke,double *Fe);
+void assemble(int e, double **Ke, double *Fe);
 void applyBC();
 void solve();
 void postProcess();
-void gaussElimination(int N, double **K, double *F, double *u, bool& err);
+void gaussElimination(int N, real **K, real *F, real *u, bool& err);
 void writeTecplotFile();
 void compressedSparseRowStorage();
-
+#ifdef CUSP
+   extern void CUSPsolver();
+#endif
 
 
 
@@ -79,11 +88,14 @@ int main()
 //------------------------------------------------------------------------------
 {
    cout << "\n********************************************************";
-   cout << "\n*   Navier-Stokes 3D - Part of cfd-with-cuda project   *";
+   cout << "\n*   Navier-Stokes 3D - Part of CFD with CUDA project   *";
    cout << "\n*       http://code.google.com/p/cfd-with-cuda         *";
    cout << "\n********************************************************\n\n";
 
    cout << "The program is started." << endl ;
+
+   time_t start, end;
+   time (&start);     // Start measuring execution time.
 
    readInput();                   cout << "Input file is read." << endl ;
    compressedSparseRowStorage();  cout << "CSR vectors are created." << endl ;
@@ -94,6 +106,9 @@ int main()
    solve();
    //postProcess();
    writeTecplotFile();            cout << "A DAT file is created for Tecplot." << endl ;
+
+   time (&end);      // Stop measuring execution time.
+   cout << endl << "Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
    
    cout << endl << "The program is terminated successfully.\nPress a key to close this window...";
 
@@ -135,9 +150,13 @@ void readInput()
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> NGP;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
-   meshfile >> dummy >> dummy2 >> iterMax;
+   meshfile >> dummy >> dummy2 >> nonlinearIterMax;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
-   meshfile >> dummy >> dummy2 >> tolerance;
+   meshfile >> dummy >> dummy2 >> nonlinearTol;
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   meshfile >> dummy >> dummy2 >> solverIterMax;
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   meshfile >> dummy >> dummy2 >> solverTol;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> density;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
@@ -435,7 +454,7 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    NNZ = rowStarts[Ndof];
 
    //initializing val vector
-   val = new double[rowStarts[Ndof]];
+   val = new real[rowStarts[Ndof]];
 
    for(i=0; i<rowStarts[Ndof]; i++) {
       val[i] = 0;
@@ -832,10 +851,10 @@ void initGlobalSysVariables()
    
    int i;
    
-   F = new double[Ndof];
-   K = new double*[Ndof];	
+   F = new real[Ndof];
+   K = new real*[Ndof];	
    for (i=0; i<Ndof; i++) {
-      K[i] = new double[Ndof];
+      K[i] = new real[Ndof];
    }
    
    Fe = new double[NEU];
@@ -1573,24 +1592,28 @@ void solve()
    //----------------CONTROL-----------------------------
 
    
-   uOld = new double[Ndof];   // keeps the old velocity values
-   u = new double[Ndof];
+   uOld = new real[Ndof];   // Keeps the old velocity values
+   u = new real[Ndof];
 
    for (i=0; i<Ndof; i++) {
       u[i] = 0.0;
    }
    
 
-   cout << endl << "Iter No.       Max. error in velocity";
-   cout << endl << "=====================================" << endl;
+   cout << endl << "Picard Iter No.       Max. error in velocity";
+   cout << endl << "============================================" << endl;
 
-   // Pickard Iterations for solution convergence
+   // Picard Iterations for solution convergence
 
-   for (iter=1; iter < iterMax; iter++) {
+   for (iter=1; iter < nonlinearIterMax; iter++) {
    
       calcGlobalSys();
       applyBC();
-      gaussElimination(Ndof, K, F, u, err);
+      #ifdef CUSP
+         CUSPsolver();
+      #else
+         gaussElimination(Ndof, K, F, u, err);
+      #endif
 
 
       //----------------CONTROL-----------------------------
@@ -1607,6 +1630,7 @@ void solve()
 
 
       maxError= u[0] - uOld[0];
+
       if (maxError < 0) {
          maxError = maxError * -1;
       }
@@ -1623,9 +1647,9 @@ void solve()
          }
       }
 
-      printf("%5d              %10.5e\n", iter, maxError);
+      printf("%9d                 %10.5e\n", iter, maxError);
       
-      if (maxError < tolerance) {
+      if (maxError < nonlinearTol) {
          break;
       }
        
@@ -1637,8 +1661,8 @@ void solve()
    
    
    // Giving info about convergence
-   if (iter >= iterMax) { 
-      cout << endl << "Solution did not converge in " << iterMax << " iterations." << endl; 
+   if (iter > nonlinearIterMax) { 
+      cout << endl << "Solution did not converge in " << nonlinearIterMax << " iterations." << endl; 
    }
    else {
       cout << endl << "Convergence is achieved at " << iter << " iterations." << endl; 
@@ -1733,7 +1757,7 @@ void writeTecplotFile()
 
 
 //------------------------------------------------------------------------------
-void gaussElimination(int N, double **K, double *F, double *u, bool& err)
+void gaussElimination(int N, real **K, real *F, real *u, bool& err)
 //------------------------------------------------------------------------------
 {
    // Solve system of N linear equations with N unknowns using Gaussian elimination
@@ -1741,8 +1765,8 @@ void gaussElimination(int N, double **K, double *F, double *u, bool& err)
    // err returns true if process fails; false if it is successful.
    
    int *indx=new int[Ndof];
-   double *scale= new double[Ndof];
-   double maxRatio, ratio, sum;
+   real *scale= new real[Ndof];
+   real maxRatio, ratio, sum;
    int maxIndx, tmpIndx;;
     
    for (int i = 0; i < N; i++) {

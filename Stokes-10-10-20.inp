@@ -1,18 +1,20 @@
 Conduction over a rectangular prism
 ================================================
-eType     : 3
-NE        : 2000
-NCN       : 2541
-NN        : 2541
-NENv      : 8
-NENp      : 8
-NGP       : 8
-iterMax   : 1000
-tolerance : 1e-10
-density   : 1.0
-viscosity : 1.0
-fx        : 0.0
-fy        : 0.0
+eType              : 3
+NE                 : 2000
+NCN                : 2541
+NN                 : 2541
+NENv               : 8
+NENp               : 8
+NGP                : 8
+nonlinearIterMax   : 1000
+nonlinearTol       : 1e-4
+solverIterMax      : 1000
+solverTol          : 1e-4
+density            : 1.0
+viscosity          : 1.0
+fx                 : 0.0
+fy                 : 0.0
 ================================================
 Node#           x               y               z
     0       0.0000000       0.0000000       0.0000000
@@ -3927,6 +3929,9 @@ Elem#   node1   node2   node3   node4   node5   node6   node7   node8
  1366        820        821        832        831        941        942        953        952
  1367        941        942        953        952       1062       1063       1074       1073
  1368       1062       1063       1074       1073       1183       1184       1195       1194
+
+
+
  1369       1183       1184       1195       1194       1304       1305       1316       1315
  1370       1304       1305       1316       1315       1425       1426       1437       1436
  1371       1425       1426       1437       1436       1546       1547       1558       1557
