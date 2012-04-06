@@ -8,7 +8,7 @@ NENv      : 8
 NENp      : 8
 NGP       : 8
 iterMax   : 20
-tolerance : 1e-6
+tolerance : 1e-15
 density   : 1.0
 viscosity : 1.0
 fx        : 0.0

@@ -1,12 +1,13 @@
 /*****************************************************************
 *        This code is a part of the CFD-with-CUDA project        *
-*           http://code.google.com/p/cfd-with-cuda               *
+*             http://code.google.com/p/cfd-with-cuda             *
 *                                                                *
-*            Dr. Cuneyt Sert and Mahmut M. Gocmen                *
+*              Dr. Cuneyt Sert and Mahmut M. Gocmen              *
 *                                                                *
-*            Department of Mechanical Engineering                *
-*              Middle East Technical University                  *
-*                       Ankara, Turkey                           *
+*              Department of Mechanical Engineering              *
+*                Middle East Technical University                *
+*                         Ankara, Turkey                         *
+*            http://www.me.metu.edu.tr/people/cuneyt             *
 *****************************************************************/
 
 #include <stdio.h>
@@ -17,9 +18,6 @@
 #include <ctime>
 #include <cmath>
 #include <algorithm>
-
-//#include <cusparse.h>
-//#include <cublas.h>
 
 using namespace std;
 
@@ -58,7 +56,6 @@ void calcJacobian();
 void calcGlobalSys();
 void assemble(int e,double **Ke,double *Fe);
 void applyBC();
-//void solveCUDA();
 void solve();
 void postProcess();
 void gaussElimination(int N, double **K, double *F, double *u, bool& err);
@@ -66,11 +63,19 @@ void writeTecplotFile();
 void compressedSparseRowStorage();
 
 
-//-------------------------------------------------------------
+
+
+//------------------------------------------------------------------------------
 int main()
-//-------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
-                                  cout << "The program is started." << endl ;
+   cout << "\n *******************************************************";
+   cout << "\n *      Stokes 3D - Part of cfd-with-cuda project      *";
+   cout << "\n *       http://code.google.com/p/cfd-with-cuda        *";
+   cout << "\n *******************************************************\n\n";
+
+   cout << "The program is started." << endl ;
+
    readInput();                   cout << "Input file is read." << endl ;
    compressedSparseRowStorage();  cout << "CSR vectors are created." << endl ;
    gaussQuad();
@@ -78,12 +83,12 @@ int main()
    calcJacobian();
    calcGlobalSys();               cout << "Global system is calculated." << endl ;
    applyBC();                     cout << "Boundary conditions are applied." << endl ;
-   //solveCUDA();
    solve();                       cout << "Global system is solved." << endl ;
    //postProcess();
-   writeTecplotFile();
+   writeTecplotFile();            cout << "A DAT file is created for Tecplot." << endl ;
    
-   cout << endl << "The program is terminated successfully. \nPress a key to close this window.";
+   cout << endl << "The program is terminated successfully.\nPress a key to close this window...";
+
    cin.get();
    return 0;
 
@@ -92,9 +97,9 @@ int main()
 
 
 
-//-------------------------------------------------------------
+//------------------------------------------------------------------------------
 void readInput()
-//-------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
 
    string dummy, dummy2, dummy4, dummy5;
@@ -243,9 +248,9 @@ void readInput()
 
 
 
-//---------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void compressedSparseRowStorage()
-//---------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
 //GtoL creation
 int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter;
@@ -273,15 +278,14 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    }         
    
    delete [] GtoLCounter;
-   // Su anda gereksiz 0'lar oluþturuluyor. Ýleride düzeltilebilir.
+   // Su anda gereksiz 0'lar oluÃ¾turuluyor. Ãleride dÃ¼zeltilebilir.
    // for(i=0; i<nVelNodes; i++) {   // extracting EBC values from GtoL with making them "-1"
       // for(j=0; j<noOfColGtoL; j++) {
          // GtoL[velNodes[i][0]][j] = -1;
       // }   
    // } 
 
-//--------------------------------------------------------------------
-//finding size of col vector, creation of rowStarts & rowStartsSmall
+// Finding size of col vector, creation of rowStarts & rowStartsSmall
 
    rowStarts = new int[Ndof+1];   // how many non zeros at rows of [K]
    rowStartsSmall = new int[NN];  // rowStarts for a piece of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
@@ -323,7 +327,7 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
       rowStarts[i+1] = NNZ + rowStarts[i];
    }
 
-   // creation of rowStarts from rowStarsSmall
+   // Creation of rowStarts from rowStarsSmall
    for (i=0; i<=NN; i++) {
       rowStartsSmall[i] = rowStarts[i];
    }  
@@ -338,8 +342,7 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    
    delete [] checkCol;
 
-   //--------------------------------------------------------------------
-   //col & colSmall creation
+   // col & colSmall creation
 
    col = new int[rowStarts[Ndof]];   // stores which non zero columns at which row data
    colSmall = new int[rowStarts[NN]/4]; // col for a piece of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
@@ -397,8 +400,9 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
       col[i+rowStarts[NN]]=col[i];
    }
 
-   ////--------------------------------------------------------------------
+
    ////----------------------CONTROL---------------------------------------
+
    //cout<<endl;
    //for (i=0; i<5; i++) { 
    //   for (j=rowStartsSmall[i]; j<rowStartsSmall[i+1]; j++) {
@@ -414,11 +418,10 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    //   }
    //   cout<<endl;
    //}
-   ////--------------------------------------------------------------------  
+   ////----------------------CONTROL---------------------------------------
 
-   //--------------------------------------------------------------------
+
    NNZ = rowStarts[Ndof];
-
 
    //initializing val vector
    val = new double[rowStarts[Ndof]];
@@ -427,23 +430,19 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
       val[i] = 0;
    }
 
-   cout << "CSR vectors are created" << endl ;
-   //--------------------------------------------------------------------
-
-
    for (i = 0; i<NN; i++) {   //deleting the unnecessary arrays for future
       delete GtoL[i];
    }
    delete [] GtoL;
 
-}
+} // End of function compressedSparseRowStorage()
 
 
 
 
-//---------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void gaussQuad()
-//---------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
    // Generates the NGP-point Gauss quadrature points and weights.
 
@@ -473,7 +472,7 @@ void gaussQuad()
       GQweight[7] = 1.0;
        
    }
-   else if (eType == 1) {       // Quadrilateral element  3 ile 4 ün yeri deðiþmeyecek mi sor!
+   else if (eType == 1) {       // Quadrilateral element  3 ile 4 Ã¼n yeri deÃ°iÃ¾meyecek mi sor!
       if (NGP == 1) {      // One-point quadrature
          GQpoint[0][0] = 0.0;            GQpoint[0][1] = 0.0;
          GQweight[0] = 4.0;
@@ -587,9 +586,9 @@ void gaussQuad()
 
 
 
-//-----------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void calcShape()
-//-----------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
    // Calculates the values of the shape functions and their derivatives with
    // respect to ksi and eta at GQ points.
@@ -691,9 +690,9 @@ void calcShape()
 
 
 
-//-------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void calcJacobian()
-//-------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
    // Calculates the Jacobian matrix, its inverse and determinant for all
    // elements at all GQ points. Also evaluates and stores derivatives of shape
@@ -829,8 +828,8 @@ void calcGlobalSys()
    double **Ke_11, **Ke_12, **Ke_13, **Ke_14, **Ke_22, **Ke_23, **Ke_24, **Ke_33, **Ke_34, **Ke_44;
    double **Ke_11_add, **Ke_12_add, **Ke_13_add, **Ke_14_add, **Ke_22_add, **Ke_23_add, **Ke_24_add, **Ke_33_add, **Ke_34_add, **Ke_44_add;
 
-   //-------------------------------------------------------------------------
-   //initialize the arrays
+
+   // Initialize the arrays
    F = new double[Ndof];
    K = new double*[Ndof];	
    for (i=0; i<Ndof; i++) {
@@ -907,10 +906,8 @@ void calcGlobalSys()
       Ke_44[i] = new double[NENp];   
       Ke_44_add[i] = new double[NENp];
    }
-   //-------------------------------------------------------------------------
 
-   //-------------------------------------------------------------------------
-   //calculating the elemental stiffness matrix(Ke) and force vector(Fe)
+   // Calculating the elemental stiffness matrix(Ke) and force vector(Fe)
 
    for (e = 0; e<NE; e++) {
       // Intitialize Ke and Fe to zero.
@@ -1039,7 +1036,7 @@ void calcGlobalSys()
 
       }   // End GQ loop  
 
-      //-------------------------------------------------------------------------
+
       // Assembly of Fe
 
       i=0;
@@ -1059,9 +1056,8 @@ void calcGlobalSys()
          Fe[i]=Fe_4[j];
          i++;
       }         
-      //-------------------------------------------------------------------------
 
-      //-------------------------------------------------------------------------
+
       // Assembly of Ke
 
       i=0;
@@ -1222,10 +1218,8 @@ void calcGlobalSys()
          }
          i++;
       }
-      //-------------------------------------------------------------------------
 
       assemble(e, Ke, Fe);  // sending Ke & Fe for assembly
-
 
    }   // End element loop
  
@@ -1234,9 +1228,9 @@ void calcGlobalSys()
 
 
 
-//-----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void assemble(int e, double **Ke, double *Fe)
-//-----------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
    // Inserts Ke and Fe into proper locations of K and F.
 
@@ -1255,16 +1249,15 @@ void assemble(int e, double **Ke, double *Fe)
       }
    }   
 
-   //--------------------------------------------------------------------
-   //Assembly process for compressed sparse storage 
-   //KeKMapSmall creation
+   // Assembly process for compressed sparse storage 
+   // KeKMapSmall creation
 
    int shiftRow, shiftCol;
    int *nodeData, p, q, k;
    // int *nodeDataEBC;
     
-   // nodeDataEBC = new int[NENv];     //elemental node data(LtoG data) (modified with EBC)    // BC implementationu sonraya býrak ineff ama bir anda zor
-   nodeData = new int[NENv];           //stores sorted LtoG data
+   // nodeDataEBC = new int[NENv];     // Elemental node data(LtoG data) (modified with EBC)    // BC implementationu sonraya bÃ½rak ineff ama bir anda zor
+   nodeData = new int[NENv];           // Stores sorted LtoG data
    for(k=0; k<NENv; k++) {
       nodeData[k] = (LtoG[e][k]);   //takes node data from LtoG
    } 
@@ -1272,21 +1265,21 @@ void assemble(int e, double **Ke, double *Fe)
    // for(i=0; i<NEN; i++) {
       // nodeData[i]=nodeDataEBC[i];
       // if (GtoL[nodeDataEBC[i]][0] == -1) {
-         // val[rowStarts[nodeDataEBC[i]]] = 1*bigNumber;      //must be fixed, val[x] = 1 repeating for every element that contains the node!
+         // val[rowStarts[nodeDataEBC[i]]] = 1*bigNumber;      // Must be fixed, val[x] = 1 repeating for every element that contains the node!
          // nodeDataEBC[i] = -1;
       // }
    // }
 
-   KeKMapSmall = new int*[NENv];        //NENv X NENv                                          
-   for(j=0; j<NENv; j++) {              //stores map data between K elemental and value vector
+   KeKMapSmall = new int*[NENv];        // NENv X NENv                                          
+   for(j=0; j<NENv; j++) {              // Stores map data between K elemental and value vector
       KeKMapSmall[j] = new int[NENv];
    }
 
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
          q=0;
-         for(p=rowStartsSmall[nodeData[i]]; p<rowStartsSmall[nodeData[i]+1]; p++) {  //p is the location of the col vector(col[x], p=x) 
-            if(colSmall[p] == nodeData[j]) {                                   //selection process of the KeKMapSmall data from the col vector
+         for(p=rowStartsSmall[nodeData[i]]; p<rowStartsSmall[nodeData[i]+1]; p++) {  // p is the location of the col vector(col[x], p=x) 
+            if(colSmall[p] == nodeData[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
                KeKMapSmall[i][j] = q; 
                break;
             }
@@ -1295,8 +1288,8 @@ void assemble(int e, double **Ke, double *Fe)
       }
    }
 
-   //--------------------------------------------------------------------
-   //creating val vector
+
+   // Creating val vector
    for(shiftRow=1; shiftRow<5; shiftRow++) {
       for(shiftCol=1; shiftCol<5; shiftCol++) {
          for(i=0; i<NENv; i++) {
@@ -1313,16 +1306,15 @@ void assemble(int e, double **Ke, double *Fe)
 
 
 
-//----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void applyBC()
-//----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
    // For EBCs reduction is not applied. Instead K and F are modified as
    // explained in class, which requires modification of both [K] and {F}.
    // SV values specified for NBCs are added to {F}.
    
-   // deleting the unnecessary arrays for future
-   //----------------------------------------------------------------------------     
+   // Deleting the unnecessary arrays for future
 
    delete [] GQweight;
    
@@ -1394,15 +1386,15 @@ void applyBC()
       delete gDSv[i];
    }
    delete [] gDSv;   
-   //----------------------------------------------------------------------------   
+
    
 
    int i, j, whichBC, node ;
    double x, y, z; 
 
-   bigNumber = 1000;                 //to make the sparse matrix diagonally dominant
+   bigNumber = 1000;            // To make the sparse matrix diagonally dominant
 
-   //----------------------------------------------------------------------------
+
    // Modify [K] and {F} for velocity BCs. [FULL STORAGE]
 
    for (i = 0; i<nVelNodes; i++) {
@@ -1437,7 +1429,7 @@ void applyBC()
    for (i = 0; i<nPressureNodes; i++) {
       node = pressureNodes[i][0];         // Node at which this EBC is specified
    	
-      x = coord[node][0];              // May be necessary for BCstring evaluation
+      x = coord[node][0];                // May be necessary for BCstring evaluation
       y = coord[node][1];
       z = coord[node][2];
 
@@ -1449,9 +1441,8 @@ void applyBC()
       }
       K[node + NN*3][node + NN*3] = 1.0*bigNumber;          
    }
-   //----------------------------------------------------------------------------
+
     
-   //---------------------------------------------------------------------------- 
    // Modify CSR vectors for BCs [CSR STORAGE]
    
    int p, q; 
@@ -1460,13 +1451,13 @@ void applyBC()
    for (i = 0; i<nVelNodes; i++) {
       node = velNodes[i][0];         // Node at which this EBC is specified
    	
-      x = coord[node][0];              // May be necessary for BCstring evaluation
+      x = coord[node][0];            // May be necessary for BCstring evaluation
       y = coord[node][1];
       z = coord[node][2];
 
       q=0;
-      for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {  //p is the location of the col vector(col[x], p=x) 
-         if(colSmall[p] == node) {                                   //selection process of the KeKMapSmall data from the col vector
+      for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {  // p is the location of the col vector(col[x], p=x) 
+         if(colSmall[p] == node) {                                  // Selection process of the KeKMapSmall data from the col vector
             break; 
          }
          q++;
@@ -1497,13 +1488,13 @@ void applyBC()
    for (i = 0; i<nPressureNodes; i++) {
       node = pressureNodes[i][0];         // Node at which this EBC is specified
    	
-      x = coord[node][0];              // May be necessary for BCstring evaluation
+      x = coord[node][0];                // May be necessary for BCstring evaluation
       y = coord[node][1];
       z = coord[node][2];
 
       q=0;
-      for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {  //p is the location of the col vector(col[x], p=x) 
-         if(colSmall[p] == node) {                                   //selection process of the KeKMapSmall data from the col vector
+      for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {   // p is the location of the col vector(col[x], p=x) 
+         if(colSmall[p] == node) {                                   // Selection process of the KeKMapSmall data from the col vector
             break; 
          }
          q++;
@@ -1516,11 +1507,9 @@ void applyBC()
       }
       val[ rowStarts[node+3*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 3) + q ] = 1 * bigNumber;    
    } 
-   //----------------------------------------------------------------------------
    
 
-   //deleting the unnecessary arrays for future
-   //----------------------------------------------------------------------------     
+   // Deleting the unnecessary arrays for future
    for (i=0; i<nPressureNodes; i++) {
       delete pressureNodes[i];
    }
@@ -1534,23 +1523,21 @@ void applyBC()
    
    // delete [] rowStartsSmall;
 
-   //----------------------------------------------------------------------------
-
 } // End of function ApplyBC()
 
 
 
 
-//-------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void solve()
-//-------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
-   // Solves NNxNN global system using Gauss Elimination.
    bool err;
    int i,j;
 
-   //----------------CONTROL-----------------------------
-   //--------------------------------------------------------
+
+   ////----------------------CONTROL---------------------------------------
+
    // Creates an output file, named "Control_Output" for K and F
    // outputControl.open(controlFile.c_str(), ios::out);
    // outputControl << NN << endl;
@@ -1563,14 +1550,15 @@ void solve()
       // outputControl << fixed << "\t" << F[i] << endl;
    // }
    // outputControl.close();
-   //--------------------------------------------------------
-   //----------------CONTROL-----------------------------
+
+   ////----------------------CONTROL---------------------------------------
+
 
    u = new double[Ndof];
    gaussElimination(Ndof, K, F, u, err);
    
-   //deleting the unnecessary arrays for future
-   //----------------------------------------------------------------------------     
+   // Deleting the unnecessary arrays for future
+
    delete [] F;   
    
    for (i=0; i<4*NN; i++) {
@@ -1578,17 +1566,14 @@ void solve()
    }   
    delete [] K;
 
-   //----------------------------------------------------------------------------   
-
 }  // End of function solve()
 
 
 
 
-
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 void postProcess()
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
    // Write the calculated unknowns on the screen.
    // Actually it is a good idea to write the results to an output file named
@@ -1612,9 +1597,10 @@ void postProcess()
 
 
 
-//-----------------------------------------------------------------------------
+
+//------------------------------------------------------------------------------
 void writeTecplotFile()
-//-----------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 {
    // Write the calculated unknowns to a Tecplot file
    double x, y, z;
@@ -1655,7 +1641,8 @@ void writeTecplotFile()
    }
 
    outputFile.close();
-}
+} // End of function writeTecplotFile()
+
 
 
 
