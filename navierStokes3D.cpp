@@ -35,8 +35,8 @@ ofstream outputControl;
 string problemNameFile, whichProblem;
 string problemName = "ProblemName.txt";
 string controlFile = "Control_Output.txt";
-string inputExtension  = ".inp";              // Change this line to specify the extension of input file (with dot).
-string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot).
+string inputExtension  = ".inp";              // Change this line to specify the extension of input file (with dot). 
+string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot). 
 
 int name, eType, NE, NN, NGP, NEU, Ndof;
 int NCN, NENv, NENp, nonlinearIterMax, solverIterMax;
