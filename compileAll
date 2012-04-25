@@ -1,0 +1,7 @@
+#!/bin/bash
+
+g++ -O2 -DSINGLE -o Stokes Stokes3D.cpp
+g++ -O2 -DSINGLE -o NS navierStokes3D.cpp
+
+nvcc -O2 -DCUSP -DSINGLE -o StokesCUSP Stokes3D.cpp CUSPsolver.cu
+nvcc -O2 -DCUSP -DSINGLE -o NSCUSP navierStokes3D.cpp CUSPsolver.cu
