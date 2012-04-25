@@ -1,13 +1,12 @@
 /*****************************************************************
 *        This code is a part of the CFD-with-CUDA project        *
-*             http://code.google.com/p/cfd-with-cuda             *
+*           http://code.google.com/p/cfd-with-cuda               *
 *                                                                *
-*              Dr. Cuneyt Sert and Mahmut M. Gocmen              *
+*            Dr. Cuneyt Sert and Mahmut M. Gocmen                *
 *                                                                *
-*              Department of Mechanical Engineering              *
-*                Middle East Technical University                *
-*                         Ankara, Turkey                         *
-*            http://www.me.metu.edu.tr/people/cuneyt             *
+*            Department of Mechanical Engineering                *
+*              Middle East Technical University                  *
+*                       Ankara, Turkey                           *
 *****************************************************************/
 
 #include <stdio.h>
@@ -19,28 +18,25 @@
 #include <cmath>
 #include <algorithm>
 
-using namespace std;
+//#include <cusparse.h>
+//#include <cublas.h>
 
-#ifdef SINGLE
-  typedef float real;
-#else
-  typedef double real;
-#endif
+using namespace std;
 
 ifstream meshfile;
 ifstream problemFile;
 ofstream outputFile;
 ofstream outputControl;
 
-string problemNameFile, whichProblem;
+string problemNameFile, whichProblem;         // Change this line to specify the name of the problem as seen in input and output files.
 string problemName = "ProblemName.txt";
 string controlFile = "Control_Output.txt";
 string inputExtension  = ".inp";              // Change this line to specify the extension of input file (with dot). 
 string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot). 
 
 int name, eType, NE, NN, NGP, NEU, Ndof;
-int NCN, NENv, NENp, nonlinearIterMax, solverIterMax;
-double density, viscosity, fx, fy, nonlinearTol, solverTol;
+int NCN, NENv, NENp, iterMax;
+double density, viscosity, fx, fy, tolerance;
 int **LtoG, **velNodes, **pressureNodes;
 double **coord;
 int nBC, nVelNodes, nPressureNodes;
@@ -49,8 +45,7 @@ double axyFunc, fxyFunc;
 double **GQpoint, *GQweight;
 double **Sp, ***DSp, **Sv, ***DSv;
 double **detJacob, ****gDSp, ****gDSv;
-real **K, *F, *u, *uOld;   // Can be float or double. K is the stiffness matrix
-                           // in full storage used Gauss Elimination solver.
+double **K, *F, *u, *uOld;
 int bigNumber;
 
 double *Fe, **Ke;
@@ -62,56 +57,41 @@ double *uNodal, *vNodal, *wNodal;
 double u0, v0, w0;
 
 int **GtoL, *rowStarts, *rowStartsSmall, *colSmall, *col, **KeKMapSmall, NNZ; 
-real *val;
+double *val;
 
 void readInput();
 void gaussQuad();
 void calcShape();
 void calcJacobian();
-void initGlobalSysVariables();
+void initGlobalSysVar();
 void calcGlobalSys();
-void assemble(int e, double **Ke, double *Fe);
+void assemble(int e,double **Ke,double *Fe);
 void applyBC();
+//void solveCUDA();
 void solve();
 void postProcess();
-void gaussElimination(int N, real **K, real *F, real *u, bool& err);
+void gaussElimination(int N, double **K, double *F, double *u, bool& err);
 void writeTecplotFile();
 void compressedSparseRowStorage();
-#ifdef CUSP
-   extern void CUSPsolver();
-#endif
 
 
-
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------
 int main()
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------
 {
-   cout << "\n********************************************************";
-   cout << "\n*   Navier-Stokes 3D - Part of CFD with CUDA project   *";
-   cout << "\n*       http://code.google.com/p/cfd-with-cuda         *";
-   cout << "\n********************************************************\n\n";
-
-   cout << "The program is started." << endl ;
-
-   time_t start, end;
-   time (&start);     // Start measuring execution time.
-
+                                  cout << "The program is started." << endl ;
    readInput();                   cout << "Input file is read." << endl ;
    compressedSparseRowStorage();  cout << "CSR vectors are created." << endl ;
    gaussQuad();
    calcShape();
    calcJacobian();
-   initGlobalSysVariables();
-   solve();
+   initGlobalSysVar();
+   //solveCUDA();
+   solve();                       cout << "Global system is solved." << endl ;
    //postProcess();
-   writeTecplotFile();            cout << "A DAT file is created for Tecplot." << endl ;
-
-   time (&end);      // Stop measuring execution time.
-   cout << endl << "Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
+   writeTecplotFile();
    
-   cout << endl << "The program is terminated successfully.\nPress a key to close this window...";
-
+   cout << endl << "The program is terminated successfully. \nPress a key to close this window.";
    cin.get();
    return 0;
 
@@ -120,9 +100,9 @@ int main()
 
 
 
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------
 void readInput()
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------
 {
 
    string dummy, dummy2, dummy4, dummy5;
@@ -150,13 +130,9 @@ void readInput()
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> NGP;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
-   meshfile >> dummy >> dummy2 >> nonlinearIterMax;
+   meshfile >> dummy >> dummy2 >> iterMax;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
-   meshfile >> dummy >> dummy2 >> nonlinearTol;
-   meshfile.ignore(256, '\n'); // Ignore the rest of the line
-   meshfile >> dummy >> dummy2 >> solverIterMax;
-   meshfile.ignore(256, '\n'); // Ignore the rest of the line
-   meshfile >> dummy >> dummy2 >> solverTol;
+   meshfile >> dummy >> dummy2 >> tolerance;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> density;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
@@ -168,7 +144,7 @@ void readInput()
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile.ignore(256, '\n'); // Read and ignore the line
    meshfile.ignore(256, '\n'); // Read and ignore the line  
-   
+
    NEU = 3*NENv + NENp;
    Ndof = 3*NN + NCN;
    
@@ -257,7 +233,7 @@ void readInput()
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    
-   if (nVelNodes!=0){
+   if (nPressureNodes!=0){
       pressureNodes = new int*[nPressureNodes];
       for (i = 0; i < nPressureNodes; i++){
          pressureNodes[i] = new int[2];
@@ -275,15 +251,15 @@ void readInput()
 
 
 
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
 void compressedSparseRowStorage()
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
 {
 //GtoL creation
 int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter;
 
    GtoL = new int*[NN];          // stores which elements connected to the node
-   noOfColGtoL = 8;              // for 3D meshes created by our mesh generator max 8 elements connect to one node,
+   noOfColGtoL = 50;              // for 3D meshes created by our mesh generator max 8 elements connect to one node,
    GtoLCounter = new int[NN];    // but for real 3D problems this must be a big enough value!
    
    for (i=0; i<NN; i++) {     
@@ -299,21 +275,21 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    
    for (i=0; i<NE; i++) {
       for(j=0; j<NENv; j++) {
-         GtoL[LtoG[i][j]][GtoLCounter[LtoG[i][j]]] = i;
-         GtoLCounter[LtoG[i][j]] += 1;
+         GtoL[ LtoG[i][j] ][ GtoLCounter[LtoG[i][j]] ] = i;
+         GtoLCounter[ LtoG[i][j] ] += 1;
       }
-   }         
+   } 
    
-   delete [] GtoLCounter;
-   // Su anda gereksiz 0'lar oluþturuluyor. Ýleride düzeltilebilir.
+   delete[] GtoLCounter;
+   // Su anda gereksiz 0'lar oluşturuluyor. İleride düzeltilebilir.
    // for(i=0; i<nVelNodes; i++) {   // extracting EBC values from GtoL with making them "-1"
       // for(j=0; j<noOfColGtoL; j++) {
          // GtoL[velNodes[i][0]][j] = -1;
       // }   
    // } 
 
-
-// Finding size of col vector, creation of rowStarts & rowStartsSmall
+//--------------------------------------------------------------------
+//finding size of col vector, creation of rowStarts & rowStartsSmall
 
    rowStarts = new int[Ndof+1];   // how many non zeros at rows of [K]
    rowStartsSmall = new int[NN];  // rowStarts for a piece of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
@@ -368,10 +344,10 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
       rowStarts[NN+i] = rowStarts[NN] + rowStarts[i];
    }
    
-   delete [] checkCol;
+   delete[] checkCol;
 
-
-   // col & colSmall creation
+   //--------------------------------------------------------------------
+   //col & colSmall creation
 
    col = new int[rowStarts[Ndof]];   // stores which non zero columns at which row data
    colSmall = new int[rowStarts[NN]/4]; // col for a piece of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
@@ -429,60 +405,62 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
       col[i+rowStarts[NN]]=col[i];
    }
 
-
+   ////--------------------------------------------------------------------
    ////----------------------CONTROL---------------------------------------
-
-   //cout << endl;
+   //cout<<endl;
    //for (i=0; i<5; i++) { 
    //   for (j=rowStartsSmall[i]; j<rowStartsSmall[i+1]; j++) {
-   //      cout << colSmall[j] << " " ;   
+   //      cout<< colSmall[j] << " " ;   
    //   }
-   //   cout << endl;
+   //   cout<<endl;
    //}
-   //cout << endl;
-   //cout << endl;
+   //cout<<endl;
+   //cout<<endl;
    //for (i=0; i<5; i++) { 
    //   for (j=rowStarts[i]; j<rowStarts[i+1]; j++) {
-   //      cout << col[j] << " " ;   
+   //      cout<< col[j] << " " ;   
    //   }
-   //   cout << endl;
+   //   cout<<endl;
    //}
+   ////--------------------------------------------------------------------  
 
-   ////----------------------CONTROL---------------------------------------
-
-
+   //--------------------------------------------------------------------
    NNZ = rowStarts[Ndof];
 
+
    //initializing val vector
-   val = new real[rowStarts[Ndof]];
+   val = new double[rowStarts[Ndof]];
 
    for(i=0; i<rowStarts[Ndof]; i++) {
       val[i] = 0;
    }
+   //--------------------------------------------------------------------
 
-   for (i = 0; i<NN; i++) {   //deleting the unnecessary arrays for future
-      delete GtoL[i];
+   for (i = 0; i < NN; i++) {   //deleting the unnecessary arrays for future
+      delete[] GtoL[i];
    }
-   delete [] GtoL;
+   delete[] GtoL;
 
-} // End of function compressedSparseRowStorage()
-
-
+}
 
 
-//------------------------------------------------------------------------------
+
+
+//---------------------------------------------------------------------------------
 void gaussQuad()
-//------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------
 {
    // Generates the NGP-point Gauss quadrature points and weights.
 
-   GQpoint = new double*[NGP];
-   for (int i=0; i<NGP; i++) {
-      GQpoint[i] = new double[3];     
-   }
-   GQweight = new double[NGP];
 
    if (eType == 3) {    // 3D Hexahedron element
+      
+      // initializing Gauss quadrature points and weights arrays
+      GQpoint = new double*[NGP];
+      for (int i=0; i<NGP; i++) {
+         GQpoint[i] = new double[3];     
+      }
+      GQweight = new double[NGP];
    
       GQpoint[0][0] = -sqrt(1.0/3);   GQpoint[0][1] = -sqrt(1.0/3);  GQpoint[0][2] = -sqrt(1.0/3); 
       GQpoint[1][0] = sqrt(1.0/3);    GQpoint[1][1] = -sqrt(1.0/3);  GQpoint[1][2] = -sqrt(1.0/3);
@@ -502,7 +480,36 @@ void gaussQuad()
       GQweight[7] = 1.0;
        
    }
-   else if (eType == 1) {       // Quadrilateral element  3 ile 4 ün yeri deðiþmeyecek mi sor!
+   
+   else if (eType == 4) { // Tetrahedral element
+      
+      // initializing Gauss quadrature points and weights arrays
+      GQpoint = new double*[NGP];
+      for (int i=0; i<NGP; i++) {
+         GQpoint[i] = new double[3];     
+      }
+      GQweight = new double[NGP];   
+   
+      GQpoint[0][0] = 0.58541020;   GQpoint[0][1] = 0.13819660;   GQpoint[0][2] = 0.13819660;   
+      GQpoint[1][0] = 0.13819660;   GQpoint[1][1] = 0.58541020;   GQpoint[1][2] = 0.13819660; 
+      GQpoint[2][0] = 0.13819660;   GQpoint[2][1] = 0.13819660;   GQpoint[2][2] = 0.58541020; 
+      GQpoint[3][0] = 0.13819660;   GQpoint[3][1] = 0.13819660;   GQpoint[3][2] = 0.13819660; 
+      GQweight[0] = 1.0/24;
+      GQweight[1] = 1.0/24;
+      GQweight[2] = 1.0/24;
+      GQweight[3] = 1.0/24;   
+      
+   }   
+      
+   else if (eType == 1) {     
+   
+      // initializing Gauss quadrature points and weights arrays
+      GQpoint = new double*[NGP];
+      for (int i=0; i<NGP; i++) {
+         GQpoint[i] = new double[2];     
+      }
+      GQweight = new double[NGP];   
+   
       if (NGP == 1) {      // One-point quadrature
          GQpoint[0][0] = 0.0;            GQpoint[0][1] = 0.0;
          GQweight[0] = 4.0;
@@ -571,6 +578,14 @@ void gaussQuad()
          GQweight[15] = 0.3478548451 * 0.3478548451;
       }
    } else if (eType == 2) {  // Triangular element
+   
+      // initializing Gauss quadrature points and weights arrays
+      GQpoint = new double*[NGP];
+      for (int i=0; i<NGP; i++) {
+         GQpoint[i] = new double[2];     
+      }
+      GQweight = new double[NGP];
+      
       if (NGP == 1) {          // One-point quadrature
          GQpoint[0][0] = 1.0/3;  GQpoint[0][1] = 1.0/3;
          GQweight[0] = 0.5;
@@ -616,9 +631,9 @@ void gaussQuad()
 
 
 
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------------
 void calcShape()
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------------
 {
    // Calculates the values of the shape functions and their derivatives with
    // respect to ksi and eta at GQ points.
@@ -667,9 +682,9 @@ void calcShape()
             DSp[0][3][k] = -0.25*(1+eta)*(1-zeta);   
             DSp[1][3][k] =  0.25*(1-ksi)*(1-zeta);
             DSp[2][3][k] = -0.25*(1-ksi)*(1+eta); 
-            DSp[0][4][k] = -0.25*(1-eta)*(1+zeta);  // ksi derivative of the 1st shape funct. at k-th GQ point.
-            DSp[1][4][k] = -0.25*(1-ksi)*(1+zeta);  // eta derivative of the 1st shape funct. at k-th GQ point.  
-            DSp[2][4][k] = 0.25*(1-ksi)*(1-eta);   // zeta derivative of the 1st shape funct. at k-th GQ point.
+            DSp[0][4][k] = -0.25*(1-eta)*(1+zeta); 
+            DSp[1][4][k] = -0.25*(1-ksi)*(1+zeta);  
+            DSp[2][4][k] = 0.25*(1-ksi)*(1-eta);   
             DSp[0][5][k] =  0.25*(1-eta)*(1+zeta);   
             DSp[1][5][k] = -0.25*(1+ksi)*(1+zeta);
             DSp[2][5][k] = 0.25*(1+ksi)*(1-eta);         
@@ -709,20 +724,86 @@ void calcShape()
                
       }
    }   
+   
+   
+   else if (eType == 4) { // Tetrahedral element
+   
+      Sp = new double*[4];
+      for (int i=0; i<NGP; i++) {
+         Sp[i] = new double[NGP];
+      }
+         
+      DSp = new double **[3];	
+      for (int i=0; i<3; i++) {
+         DSp[i] = new double *[4];
+         for (int j=0; j<4; j++) {
+            DSp[i][j] = new double[NGP];
+         }
+      }    
+
+      for (int k = 0; k<NGP; k++) {
+         ksi = GQpoint[k][0];
+         eta = GQpoint[k][1];
+         zeta = GQpoint[k][2];
+         
+         Sp[0][k] = 1-ksi-eta-zeta;
+         Sp[1][k] = ksi;
+         Sp[2][k] = eta;
+         Sp[3][k] = zeta;   
+
+         DSp[0][0][k] = -1;  // ksi derivative of the 1st shape funct. at k-th GQ point.
+         DSp[1][0][k] = -1;  // eta derivative of the 1st shape funct. at k-th GQ point.  
+         DSp[2][0][k] = -1;   // zeta derivative of the 1st shape funct. at k-th GQ point.
+         DSp[0][1][k] = 1;   
+         DSp[1][1][k] = 0;
+         DSp[2][1][k] = 0;         
+         DSp[0][2][k] =  0;   
+         DSp[1][2][k] =  1;
+         DSp[2][2][k] = 0;         
+         DSp[0][3][k] = 0;   
+         DSp[1][3][k] =  0;
+         DSp[2][3][k] = 1;
+         
+      }
+
+      Sv = new double*[4];
+      for (int i=0; i<NGP; i++) {
+         Sv[i] = new double[NGP];
+      }
+   
+      DSv = new double **[3];	
+      for (int i=0; i<3; i++) {
+         DSv[i] = new double *[4];
+         for (int j=0; j<4; j++) {
+            DSv[i][j] = new double[NGP];
+         }
+      }
       
-   for (int i = 0; i<8; i++) {   //deleting the unnecessary arrays for future
-      delete GQpoint[i];
+      for (int i=0; i<NGP; i++) {
+         Sv[i] = Sp[i];
+      }
+      
+      for (int i=0; i<3; i++) {
+         for (int j=0; j<4; j++) {
+            DSv[i][j] = DSp[i][j];
+         }
+      }         
+      
    }
-   delete [] GQpoint;
+   
+   for (int i = 0; i<NGP; i++) {   //deleting the unnecessary arrays for future
+      delete[] GQpoint[i];
+   }
+   delete[] GQpoint;
       
 } // End of function calcShape()
 
 
 
 
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 void calcJacobian()
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 {
    // Calculates the Jacobian matrix, its inverse and determinant for all
    // elements at all GQ points. Also evaluates and stores derivatives of shape
@@ -733,7 +814,7 @@ void calcJacobian()
    double **Jacob, **invJacob;
    double temp;
    
-   if (eType == 3) {
+   if (eType == 3 || eType == 4) {
    
       e_coord = new double*[NENp];
    
@@ -825,7 +906,7 @@ void calcJacobian()
             }
          
             for (i = 0; i<3; i++){
-               for (j = 0; j<8; j++){
+               for (j = 0; j<NENp; j++){
                   temp = 0;
                   for (x = 0; x<3; x++){
                      temp = invJacob[i][x] * DSp[x][j][k]+temp;
@@ -836,25 +917,39 @@ void calcJacobian()
             }
          }
       }
-   } 
+   }
+
+   for (int i = 0; i<3; i++) {   //deleting the unnecessary arrays for future
+      delete[] Jacob[i];
+   }
+   delete[] Jacob;
+
+   for (int i = 0; i<3; i++) {   //deleting the unnecessary arrays for future
+      delete[] invJacob[i];
+   }
+   delete[] invJacob;
+   
+   for (int i = 0; i<NENp; i++) {   //deleting the unnecessary arrays for future
+      delete[] e_coord[i];
+   }
+   delete[] e_coord;
    
 }  // End of function calcJacobian()
 
 
 
-
 //------------------------------------------------------------------------------
-void initGlobalSysVariables()
+void initGlobalSysVar()
 //------------------------------------------------------------------------------
 {
    // Allocating the memory for stiffness matrices and force vectors
    
    int i;
    
-   F = new real[Ndof];
-   K = new real*[Ndof];	
+   F = new double[Ndof];
+   K = new double*[Ndof];	
    for (i=0; i<Ndof; i++) {
-      K[i] = new real[Ndof];
+      K[i] = new double[Ndof];
    }
    
    Fe = new double[NEU];
@@ -949,8 +1044,8 @@ void calcGlobalSys()
    int e, i, j, k, m, n, node;
    double Tau;
    //   double x, y, axy, fxy;
-
-   // Initialize the arrays
+   //-------------------------------------------------------------------------
+   //initialize the arrays
 
    for (i=0; i<Ndof; i++) {
       F[i] = 0;
@@ -959,7 +1054,10 @@ void calcGlobalSys()
 	   }
    }
    
-   // Calculating the elemental stiffness matrix(Ke) and force vector(Fe)
+   //-------------------------------------------------------------------------
+
+   //-------------------------------------------------------------------------
+   //calculating the elemental stiffness matrix(Ke) and force vector(Fe)
 
    for (e = 0; e<NE; e++) {
       // Intitialize Ke and Fe to zero.
@@ -1004,6 +1102,7 @@ void calcGlobalSys()
          wNodal[i] = u[LtoG[e][i]+2*NN];
       }
       
+      
       for (k = 0; k<NGP; k++) {   // Gauss quadrature loop
             
          u0 = 0;
@@ -1047,7 +1146,6 @@ void calcGlobalSys()
                      gDSv[e][1][i][k] * gDSv[e][1][j][k] +
                      gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
                      density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
-                     //density * Sv[i][k];
                      
                Ke_12_add[i][j] = Ke_12_add[i][j] + viscosity * gDSv[e][1][i][k] * gDSv[e][0][j][k];
                
@@ -1083,7 +1181,8 @@ void calcGlobalSys()
             }
          }
 
-  // Apply GLS stabilization for linear elements with NENv = NENp
+         //-------------------------------------------------------------------------  
+         // Apply GLS stabilization for linear elements with NENv = NENp
     
          Tau = ((1.0/12.0)*2) / viscosity;  // GLS parameter
 
@@ -1135,8 +1234,9 @@ void calcGlobalSys()
                               ( gDSv[e][0][i][k] * gDSv[e][0][j][k] + gDSv[e][1][i][k] * gDSv[e][1][j][k] + gDSv[e][2][i][k] * gDSv[e][2][j][k] );
             }
          }
+         
+         //-------------------------------------------------------------------------  
 
-  // Apply GLS stabilization for linear elements with NENv = NENp
             
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {            
@@ -1164,6 +1264,7 @@ void calcGlobalSys()
 
       }   // End GQ loop  
 
+      //-------------------------------------------------------------------------
       // Assembly of Fe
 
       i=0;
@@ -1183,7 +1284,9 @@ void calcGlobalSys()
          Fe[i]=Fe_4[j];
          i++;
       }         
+      //-------------------------------------------------------------------------
 
+      //-------------------------------------------------------------------------
       // Assembly of Ke
 
       i=0;
@@ -1344,6 +1447,7 @@ void calcGlobalSys()
          }
          i++;
       }
+      //-------------------------------------------------------------------------
 
       assemble(e, Ke, Fe);  // sending Ke & Fe for assembly
 
@@ -1355,9 +1459,9 @@ void calcGlobalSys()
 
 
 
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------
 void assemble(int e, double **Ke, double *Fe)
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------
 {
    // Inserts Ke and Fe into proper locations of K and F.
 
@@ -1376,37 +1480,38 @@ void assemble(int e, double **Ke, double *Fe)
       }
    }   
 
-   // Assembly process for compressed sparse storage 
-   // KeKMapSmall creation
+   //--------------------------------------------------------------------
+   //Assembly process for compressed sparse storage 
+   //KeKMapSmall creation
 
    int shiftRow, shiftCol;
    int *nodeData, p, q, k;
    // int *nodeDataEBC;
     
-   // nodeDataEBC = new int[NENv];     // Elemental node data(LtoG data) (modified with EBC)    // BC implementationu sonraya býrak ineff ama bir anda zor
-   nodeData = new int[NENv];           // Stores sorted LtoG data
+   // nodeDataEBC = new int[NENv];     //elemental node data(LtoG data) (modified with EBC)    // BC implementationu sonraya bırak ineff ama bir anda zor
+   nodeData = new int[NENv];           //stores sorted LtoG data
    for(k=0; k<NENv; k++) {
-      nodeData[k] = (LtoG[e][k]);      // Takes node data from LtoG
+      nodeData[k] = (LtoG[e][k]);   //takes node data from LtoG
    } 
 
    // for(i=0; i<NEN; i++) {
       // nodeData[i]=nodeDataEBC[i];
       // if (GtoL[nodeDataEBC[i]][0] == -1) {
-         // val[rowStarts[nodeDataEBC[i]]] = 1*bigNumber;      // Must be fixed, val[x] = 1 repeating for every element that contains the node!
+         // val[rowStarts[nodeDataEBC[i]]] = 1*bigNumber;      //must be fixed, val[x] = 1 repeating for every element that contains the node!
          // nodeDataEBC[i] = -1;
       // }
    // }
 
-   KeKMapSmall = new int*[NENv];        // NENv X NENv                                          
-   for(j=0; j<NENv; j++) {              // Stores map data between K elemental and value vector
+   KeKMapSmall = new int*[NENv];        //NENv X NENv                                          
+   for(j=0; j<NENv; j++) {              //stores map data between K elemental and value vector
       KeKMapSmall[j] = new int[NENv];
    }
 
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
          q=0;
-         for(p=rowStartsSmall[nodeData[i]]; p<rowStartsSmall[nodeData[i]+1]; p++) {  // p is the location of the col vector(col[x], p=x) 
-            if(colSmall[p] == nodeData[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
+         for(p=rowStartsSmall[nodeData[i]]; p<rowStartsSmall[nodeData[i]+1]; p++) {  //p is the location of the col vector(col[x], p=x) 
+            if(colSmall[p] == nodeData[j]) {                                   //selection process of the KeKMapSmall data from the col vector
                KeKMapSmall[i][j] = q; 
                break;
             }
@@ -1415,7 +1520,8 @@ void assemble(int e, double **Ke, double *Fe)
       }
    }
 
-   // Creating val vector
+   //--------------------------------------------------------------------
+   //creating val vector
    for(shiftRow=1; shiftRow<5; shiftRow++) {
       for(shiftCol=1; shiftCol<5; shiftCol++) {
          for(i=0; i<NENv; i++) {
@@ -1432,9 +1538,9 @@ void assemble(int e, double **Ke, double *Fe)
 
 
 
-//------------------------------------------------------------------------------
+//----------------------------------------------------------------------------
 void applyBC()
-//------------------------------------------------------------------------------
+//----------------------------------------------------------------------------
 {
    // For EBCs reduction is not applied. Instead K and F are modified as
    // explained in class, which requires modification of both [K] and {F}.
@@ -1444,18 +1550,19 @@ void applyBC()
    int i, j, whichBC, node ;
    double x, y, z; 
 
-   bigNumber = 1000;         // To make the sparse matrix diagonally dominant
+   bigNumber = 1;                 //to make the sparse matrix diagonally dominant
 
+   //----------------------------------------------------------------------------
    // Modify [K] and {F} for velocity BCs. [FULL STORAGE]
 
    for (i = 0; i<nVelNodes; i++) {
       node = velNodes[i][0];         // Node at which this EBC is specified
    	
-      x = coord[node][0];            // May be necessary for BCstring evaluation
+      x = coord[node][0];              // May be necessary for BCstring evaluation
       y = coord[node][1];
       z = coord[node][2];
 
-      whichBC = velNodes[i][1]-1;    // Number of the specified BC
+      whichBC = velNodes[i][1]-1;      // Number of the specified BC
       
       F[node] = BCstrings[whichBC][0]*bigNumber;    // Specified value of the PV
       for (j=0; j<Ndof; j++) {
@@ -1480,11 +1587,11 @@ void applyBC()
    for (i = 0; i<nPressureNodes; i++) {
       node = pressureNodes[i][0];         // Node at which this EBC is specified
    	
-      x = coord[node][0];                 // May be necessary for BCstring evaluation
+      x = coord[node][0];              // May be necessary for BCstring evaluation
       y = coord[node][1];
       z = coord[node][2];
 
-      whichBC = pressureNodes[i][1]-1;    // Number of the specified BC   	
+      whichBC = pressureNodes[i][1]-1;      // Number of the specified BC   	
       
       F[node + NN*3] = BCstrings[whichBC][0]*bigNumber;    // Specified value of the PV
       for (j=0; j<Ndof; j++) {
@@ -1492,9 +1599,9 @@ void applyBC()
       }
       K[node + NN*3][node + NN*3] = 1.0*bigNumber;          
    }
-
+   //----------------------------------------------------------------------------
     
-
+   //---------------------------------------------------------------------------- 
    // Modify CSR vectors for BCs [CSR STORAGE]
    
    int p, q; 
@@ -1503,13 +1610,13 @@ void applyBC()
    for (i = 0; i<nVelNodes; i++) {
       node = velNodes[i][0];         // Node at which this EBC is specified
    	
-      x = coord[node][0];            // May be necessary for BCstring evaluation
+      x = coord[node][0];              // May be necessary for BCstring evaluation
       y = coord[node][1];
       z = coord[node][2];
 
       q=0;
-      for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {   // p is the location of the col vector(col[x], p=x) 
-         if(colSmall[p] == node) {                                   // Selection process of the KeKMapSmall data from the col vector
+      for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {  //p is the location of the col vector(col[x], p=x) 
+         if(colSmall[p] == node) {                                   //selection process of the KeKMapSmall data from the col vector
             break; 
          }
          q++;
@@ -1540,7 +1647,7 @@ void applyBC()
    for (i = 0; i<nPressureNodes; i++) {
       node = pressureNodes[i][0];         // Node at which this EBC is specified
    	
-      x = coord[node][0];                 // May be necessary for BCstring evaluation
+      x = coord[node][0];              // May be necessary for BCstring evaluation
       y = coord[node][1];
       z = coord[node][2];
 
@@ -1559,23 +1666,24 @@ void applyBC()
       }
       val[ rowStarts[node+3*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 3) + q ] = 1 * bigNumber;    
    } 
+   //----------------------------------------------------------------------------
 
 } // End of function ApplyBC()
 
 
 
 
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 void solve()
-//------------------------------------------------------------------------------
+//-------------------------------------------------------------------------
 {
+   // Solves NNxNN global system using Gauss Elimination.
    bool err;
    int i, j, iter;
    double newError, maxError;
 
-
    //----------------CONTROL-----------------------------
-
+   //--------------------------------------------------------
    // Creates an output file, named "Control_Output" for K and F
    // outputControl.open(controlFile.c_str(), ios::out);
    // outputControl << NN << endl;
@@ -1588,49 +1696,37 @@ void solve()
       // outputControl << fixed << "\t" << F[i] << endl;
    // }
    // outputControl.close();
-
+   //--------------------------------------------------------
    //----------------CONTROL-----------------------------
-
    
-   uOld = new real[Ndof];   // Keeps the old velocity values
-   u = new real[Ndof];
+   uOld = new double[Ndof];   // keeps the old velocity values
+   u = new double[Ndof];
 
    for (i=0; i<Ndof; i++) {
       u[i] = 0.0;
    }
+   //-------------------------------------------------------------------------
+   // Pickard Iterations for solution convergence
    
+   for (iter=0; iter < iterMax; iter++) {
 
-   cout << endl << "Picard Iter No.       Max. error in velocity";
-   cout << endl << "============================================" << endl;
-
-   // Picard Iterations for solution convergence
-
-   for (iter=1; iter < nonlinearIterMax; iter++) {
-   
-      calcGlobalSys();
-      applyBC();
-      #ifdef CUSP
-         CUSPsolver();
-      #else
-         gaussElimination(Ndof, K, F, u, err);
-      #endif
-
+      calcGlobalSys();               cout << "Global system is calculated." << endl ;
+      applyBC();                     cout << "Boundary conditions are applied." << endl ;   
+      gaussElimination(Ndof, K, F, u, err);
 
       //----------------CONTROL-----------------------------
-
+      //--------------------------------------------------------
       // Printing velocity values after each iteration
    
-      //if (eType == 3) {
-      //   for (int i = 0; i<NN; i++) { 
-      //      printf("%-5d %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f\n", i, coord[i][0], coord[i][1], coord[i][2], u[i], u[i+NN], u[i+NN*2], u[i+NN*3]);
-      //   }
-      //}
-
+      if (eType == 3 || eType == 4) {
+         for (int i = 0; i<NN; i++) { 
+            printf("%-5d %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f\n", i, coord[i][0], coord[i][1], coord[i][2], u[i], u[i+NN], u[i+NN*2], u[i+NN*3]);
+         }
+      }
+      //--------------------------------------------------------
       //----------------CONTROL-----------------------------
 
-
       maxError= u[0] - uOld[0];
-
       if (maxError < 0) {
          maxError = maxError * -1;
       }
@@ -1647,9 +1743,9 @@ void solve()
          }
       }
 
-      printf("%9d                 %10.5e\n", iter, maxError);
+      cout << "Error= " << maxError << endl;
       
-      if (maxError < nonlinearTol) {
+      if (maxError < tolerance) {
          break;
       }
        
@@ -1658,33 +1754,38 @@ void solve()
       }
       
    }   
+   //-------------------------------------------------------------------------   
    
    
    // Giving info about convergence
-   if (iter > nonlinearIterMax) { 
-      cout << endl << "Solution did not converge in " << nonlinearIterMax << " iterations." << endl; 
+   if (iter >= iterMax) { 
+      cout << "Solution did not converge in " << iterMax << "iterations." << endl; 
    }
    else {
-      cout << endl << "Convergence is achieved at " << iter << " iterations." << endl; 
+      cout << "Convergence is achieved at " << iter << " iterations." << endl; 
    }   
    
    
-   // Deleting the unnecessary arrays for future
-   delete [] F;   
+   //deleting the unnecessary arrays for future
+   //----------------------------------------------------------------------------     
+   delete[] F;   
    
    for (i=0; i<4*NN; i++) {
-      delete K[i];
+      delete[] K[i];
    }   
-   delete [] K;
+   delete[] K;
+
+   //----------------------------------------------------------------------------   
 
 }  // End of function solve()
 
 
 
 
-//------------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 void postProcess()
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 {
    // Write the calculated unknowns on the screen.
    // Actually it is a good idea to write the results to an output file named
@@ -1693,7 +1794,7 @@ void postProcess()
    printf("\nCalculated unknowns are \n\n");
    printf(" Node      x       y       z         u         v         w       p \n");
    printf("========================================================================\n");
-   if (eType == 3) {
+   if (eType == 3 || eType == 4) {
       for (int i = 0; i<NN; i++) { 
          printf("%-5d %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f\n", i, coord[i][0], coord[i][1], coord[i][2], u[i], u[i+NN], u[i+NN*2], u[i+NN*3]);
       }
@@ -1708,9 +1809,9 @@ void postProcess()
 
 
 
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 void writeTecplotFile()
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
 {
    // Write the calculated unknowns to a Tecplot file
    double x, y, z;
@@ -1728,7 +1829,7 @@ void writeTecplotFile()
       outputFile << "ZONE NODES=" <<  NN  << ", ELEMENTS=" << NE << ", DATAPACKING=POINT, ZONETYPE=FEBRICK" << endl;   
       }
       else { 
-      outputFile << "ZONE N=" <<  NN  << " E=" << NE << " F=FEPOINT ET=TRIANGLE" << endl;
+      outputFile << "ZONE NODES=" <<  NN  << ", ELEMENTS=" << NE << ", DATAPACKING=POINT, ZONETYPE=FETETRAHEDRON" << endl;   
       }
 
    // Print the coordinates and the calculated values
@@ -1751,22 +1852,21 @@ void writeTecplotFile()
    }
 
    outputFile.close();
-} // End of function writeTecplotFile()
+}
 
 
 
-
-//------------------------------------------------------------------------------
-void gaussElimination(int N, real **K, real *F, real *u, bool& err)
-//------------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+void gaussElimination(int N, double **K, double *F, double *u, bool& err)
+//-----------------------------------------------------------------------------
 {
    // Solve system of N linear equations with N unknowns using Gaussian elimination
    // with scaled partial pivoting.
    // err returns true if process fails; false if it is successful.
    
    int *indx=new int[Ndof];
-   real *scale= new real[Ndof];
-   real maxRatio, ratio, sum;
+   double *scale= new double[Ndof];
+   double maxRatio, ratio, sum;
    int maxIndx, tmpIndx;;
     
    for (int i = 0; i < N; i++) {
