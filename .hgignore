@@ -1,9 +1,0 @@
-a.out
-Stokes
-NS
-StokesCUSP
-NSCUSP
-
-syntax: glob
-*.dat
-
