@@ -35,8 +35,8 @@ ofstream outputControl;
 string problemNameFile, whichProblem;
 string problemName = "ProblemName.txt";
 string controlFile = "Control_Output.txt";
-string inputExtension  = ".inp";              // Change this line to specify the extension of input file (with dot). 
-string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot). 
+string inputExtension  = ".inp";              // Change this line to specify the extension of input file (with dot).
+string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot).
 
 int name, eType, NE, NN, NGP, NEU, Ndof;
 int NCN, NENv, NENp, nonlinearIterMax, solverIterMax;
@@ -1203,7 +1203,7 @@ void calcGlobalSys()
 
   // Apply GLS stabilization for linear elements with NENv = NENp
     
-         Tau = ((1.0/12.0)*2) / viscosity;  // GLS parameter
+         Tau = (1.0/12.0) / viscosity;  // GLS parameter
 
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
@@ -1237,13 +1237,13 @@ void calcGlobalSys()
          for (i=0; i<NENp; i++) {
             for (j=0; j<NENv; j++) {
               Ke_41_add[i][j] = Ke_41_add[i][j] - Tau * density * 
-                             (u0 * gDSv[e][0][i][k] + v0 * gDSv[e][1][i][k] + w0 * gDSv[e][2][i][k]) * gDSp[e][0][j][k]; 
+                             (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) * gDSp[e][0][i][k]; 
              
               Ke_42_add[i][j] = Ke_42_add[i][j] - Tau * density * 
-                             (u0 * gDSv[e][0][i][k] + v0 * gDSv[e][1][i][k] + w0 * gDSv[e][2][i][k]) * gDSp[e][1][j][k]; 
+                             (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) * gDSp[e][1][i][k]; 
                              
               Ke_43_add[i][j] = Ke_43_add[i][j] - Tau * density * 
-                             (u0 * gDSv[e][0][i][k] + v0 * gDSv[e][1][i][k] + w0 * gDSv[e][2][i][k]) * gDSp[e][2][j][k];        
+                             (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) * gDSp[e][2][i][k];        
             } 
          } 
          
@@ -1546,6 +1546,9 @@ void assemble(int e, double **Ke, double *Fe)
          }
       }
    }         
+   
+   delete[] nodeData;
+      
 } // End of function assemble()
 
 
