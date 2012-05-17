@@ -49,17 +49,19 @@ double axyFunc, fxyFunc;
 double **GQpoint, *GQweight;
 double **Sp, ***DSp, **Sv, ***DSv;
 double **detJacob, ****gDSp, ****gDSv;
+int iter;
 real **K, *F, *u, *uOld;   // Can be float or double. K is the stiffness matrix
                            // in full storage used Gauss Elimination solver.
 int bigNumber;
 
 double *Fe, **Ke;
-double *Fe_1, *Fe_2, *Fe_3, *Fe_4;
-double **Ke_11, **Ke_12, **Ke_13, **Ke_14, **Ke_22, **Ke_23, **Ke_24, **Ke_33, **Ke_34, **Ke_41, **Ke_42, **Ke_43, **Ke_44;
-double **Ke_11_add, **Ke_12_add, **Ke_13_add, **Ke_14_add, **Ke_22_add, **Ke_23_add, **Ke_24_add;
-double **Ke_33_add, **Ke_34_add, **Ke_41_add, **Ke_42_add, **Ke_43_add, **Ke_44_add;
+double *Fe_1, *Fe_2, *Fe_3, *Fe_4, *Fe_1_add, *Fe_2_add, *Fe_3_add, *Fe_4_add;
+double **Ke_11, **Ke_12, **Ke_13, **Ke_14, **Ke_21, **Ke_22, **Ke_23, **Ke_24, **Ke_31, **Ke_32, **Ke_33, **Ke_34, **Ke_41, **Ke_42, **Ke_43, **Ke_44;
+double **Ke_11_add, **Ke_12_add, **Ke_13_add, **Ke_14_add, **Ke_21_add, **Ke_22_add, **Ke_23_add, **Ke_24_add;
+double **Ke_31_add, **Ke_32_add, **Ke_33_add, **Ke_34_add, **Ke_41_add, **Ke_42_add, **Ke_43_add, **Ke_44_add;
 double *uNodal, *vNodal, *wNodal;
-double u0, v0, w0;
+double u0, v0, w0; 
+double *Du0, *Dv0, *Dw0;
 
 int **GtoL, *rowStarts, *rowStartsSmall, *colSmall, *col, **KeKMapSmall, NNZ; 
 real *val;
@@ -77,6 +79,7 @@ void postProcess();
 void gaussElimination(int N, real **K, real *F, real *u, bool& err);
 void writeTecplotFile();
 void compressedSparseRowStorage();
+
 #ifdef CUSP
    extern void CUSPsolver();
 #endif
@@ -305,7 +308,7 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    } 
    
    delete[] GtoLCounter;
-   // Su anda gereksiz 0'lar oluþturuluyor. Ýleride düzeltilebilir.
+   // Su anda gereksiz 0'lar olu?turuluyor. Yleride düzeltilebilir.
    // for(i=0; i<nVelNodes; i++) {   // extracting EBC values from GtoL with making them "-1"
       // for(j=0; j<noOfColGtoL; j++) {
          // GtoL[velNodes[i][0]][j] = -1;
@@ -987,16 +990,21 @@ void initGlobalSysVariables()
    Fe_3 = new double[NENv];
    Fe_4 = new double[NENp];
    
+   Fe_1_add = new double[NENv];
+   Fe_2_add = new double[NENv];
+   Fe_3_add = new double[NENv];
+   Fe_4_add = new double[NENp];
+   
    Ke_11 = new double*[NENv];
    Ke_12 = new double*[NENv];
 	Ke_13 = new double*[NENv];
    Ke_14 = new double*[NENv];
-   // Ke_21 is the transpose of Ke_12
+   Ke_21 = new double*[NENv];
    Ke_22 = new double*[NENv];
    Ke_23 = new double*[NENv];
 	Ke_24 = new double*[NENv]; 
-   // Ke_31 is the transpose of Ke_13
-   // Ke_32 is the transpose of Ke_23
+	Ke_31 = new double*[NENv];
+   Ke_32 = new double*[NENv];
 	Ke_33 = new double*[NENv];
 	Ke_34 = new double*[NENv];
    Ke_41 = new double*[NENv];
@@ -1008,9 +1016,12 @@ void initGlobalSysVariables()
    Ke_12_add = new double*[NENv];
    Ke_13_add = new double*[NENv];
    Ke_14_add = new double*[NENv];
+   Ke_21_add = new double*[NENv];
    Ke_22_add = new double*[NENv];
    Ke_23_add = new double*[NENv];
    Ke_24_add = new double*[NENv];
+   Ke_31_add = new double*[NENv];
+   Ke_32_add = new double*[NENv];   
    Ke_33_add = new double*[NENv];
    Ke_34_add = new double*[NENv];
    Ke_41_add = new double*[NENp];
@@ -1022,9 +1033,12 @@ void initGlobalSysVariables()
       Ke_12[i] = new double[NENv];
       Ke_13[i] = new double[NENv];
       Ke_14[i] = new double[NENp];
+      Ke_21[i] = new double[NENv];      
       Ke_22[i] = new double[NENv];
       Ke_23[i] = new double[NENv];
       Ke_24[i] = new double[NENp];
+      Ke_31[i] = new double[NENv];
+      Ke_32[i] = new double[NENp];
       Ke_33[i] = new double[NENv];
       Ke_34[i] = new double[NENp];
       
@@ -1032,9 +1046,12 @@ void initGlobalSysVariables()
       Ke_12_add[i] = new double[NENv];
       Ke_13_add[i] = new double[NENv];
       Ke_14_add[i] = new double[NENp];
+      Ke_21_add[i] = new double[NENv];      
       Ke_22_add[i] = new double[NENv];
       Ke_23_add[i] = new double[NENv];
       Ke_24_add[i] = new double[NENp];
+      Ke_31_add[i] = new double[NENv];
+      Ke_32_add[i] = new double[NENp];      
       Ke_33_add[i] = new double[NENv];
       Ke_34_add[i] = new double[NENp];
    }
@@ -1052,6 +1069,11 @@ void initGlobalSysVariables()
    uNodal = new double[NENv];
    vNodal = new double[NENv];
    wNodal = new double[NENv];
+
+   Du0 = new double[3];
+   Dv0 = new double[3];
+   Dw0 = new double[3];   
+   
    
 }   
 
@@ -1098,8 +1120,11 @@ void calcGlobalSys()
             Ke_11[i][j] = 0;
             Ke_12[i][j] = 0;
             Ke_13[i][j] = 0;
+            Ke_21[i][j] = 0;
             Ke_22[i][j] = 0;
             Ke_23[i][j] = 0;
+            Ke_31[i][j] = 0;
+            Ke_32[i][j] = 0;
             Ke_33[i][j] = 0;
          }
          for (j=0; j<NENp; j++) {
@@ -1128,6 +1153,12 @@ void calcGlobalSys()
          u0 = 0;
          v0 = 0;
          w0 = 0;
+
+         for (i=0; i<3; i++) {
+            Du0[i] = 0;
+            Dv0[i] = 0;
+            Dw0[i] = 0;
+         }
          
          for (i=0; i<NENv; i++) {
             u0 = u0 + Sp[i][k] * uNodal[i];
@@ -1135,13 +1166,28 @@ void calcGlobalSys()
             w0 = w0 + Sp[i][k] * wNodal[i];            
          }
          
+         for (i=0; i<3; i++) {
+            for (j=0; j<NENv; j++) {
+               Du0[i] = Du0[i] + gDSp[e][i][j][k] * uNodal[j];
+               Dv0[i] = Dv0[i] + gDSp[e][i][j][k] * vNodal[j];
+               Dw0[i] = Dw0[i] + gDSp[e][i][j][k] * wNodal[j];
+            }
+         }
+         
          for (i=0; i<NENv; i++) {
+            Fe_1_add[i] = 0;
+            Fe_2_add[i] = 0;
+            Fe_3_add[i] = 0;
+            Fe_4_add[i] = 0;
             for (j=0; j<NENv; j++) {
                Ke_11_add[i][j] = 0;
                Ke_12_add[i][j] = 0;
                Ke_13_add[i][j] = 0;
+               Ke_21_add[i][j] = 0;
                Ke_22_add[i][j] = 0;
                Ke_23_add[i][j] = 0;
+               Ke_31_add[i][j] = 0;
+               Ke_32_add[i][j] = 0;
                Ke_33_add[i][j] = 0;
             }
             for (j=0; j<NENp; j++) {
@@ -1159,46 +1205,115 @@ void calcGlobalSys()
             }
          }
 
-         for (i=0; i<NENv; i++) {
-            for (j=0; j<NENv; j++) {
-               Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
-                     2 * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
-                     gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-                     gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
-                     density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
-                     
-               Ke_12_add[i][j] = Ke_12_add[i][j] + viscosity * gDSv[e][1][i][k] * gDSv[e][0][j][k];
-               
-               Ke_13_add[i][j] = Ke_13_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][0][j][k];
-               
-               Ke_22_add[i][j] = Ke_22_add[i][j] + viscosity * (
-                     gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
-                     2 * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-                     gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
-                     density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
-                     
-               Ke_23_add[i][j] = Ke_23_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][1][j][k];
-               
-               Ke_33_add[i][j] = Ke_33_add[i][j] + viscosity * (
-                     gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
-                     gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-                     2 * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
-                     density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
-                     
+         if (iter==1) { // uses Picard iteration for initial values 
+         
+            for (i=0; i<NENv; i++) {
+               for (j=0; j<NENv; j++) {
+                  Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
+                        2 * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                        density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
+                        
+                  Ke_12_add[i][j] = Ke_12_add[i][j] + viscosity * gDSv[e][1][i][k] * gDSv[e][0][j][k];
+                  
+                  Ke_13_add[i][j] = Ke_13_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][0][j][k];
+                  
+                  Ke_22_add[i][j] = Ke_22_add[i][j] + viscosity * (
+                        gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                        2 * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                        density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
+                        
+                  Ke_23_add[i][j] = Ke_23_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][1][j][k];
+                  
+                  Ke_33_add[i][j] = Ke_33_add[i][j] + viscosity * (
+                        gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                        2 * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                        density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
+                        
+               }
+               for (j=0; j<NENp; j++) {
+                  Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][0][i][k] * Sp[j][k];
+                  Ke_24_add[i][j] = Ke_24_add[i][j] - gDSv[e][1][i][k] * Sp[j][k];
+                  Ke_34_add[i][j] = Ke_34_add[i][j] - gDSv[e][2][i][k] * Sp[j][k];
+               }         
             }
-            for (j=0; j<NENp; j++) {
-               Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][0][i][k] * Sp[j][k];
-               Ke_24_add[i][j] = Ke_24_add[i][j] - gDSv[e][1][i][k] * Sp[j][k];
-               Ke_34_add[i][j] = Ke_34_add[i][j] - gDSv[e][2][i][k] * Sp[j][k];
-            }         
+            
+            for (i=0; i<NENv; i++) {
+               for (j=0; j<NENp; j++) {
+                  Ke_41_add[j][i] = Ke_14_add[i][j] ;
+                  Ke_42_add[j][i] = Ke_24_add[i][j] ;
+                  Ke_43_add[j][i] = Ke_34_add[i][j] ;
+               }
+            }
+
          }
          
-         for (i=0; i<NENv; i++) {
-            for (j=0; j<NENp; j++) {
-               Ke_41_add[j][i] = Ke_14_add[i][j] ;
-               Ke_42_add[j][i] = Ke_24_add[i][j] ;
-               Ke_43_add[j][i] = Ke_34_add[i][j] ;
+         else {
+
+            for (i=0; i<NENv; i++) {
+               Fe_1_add[i] = Fe_1_add[i] + density * Sv[i][k] * (u0 * Du0[0] + v0 * Du0[1] + w0 * Du0[2]);
+               Fe_2_add[i] = Fe_2_add[i] + density * Sv[i][k] * (u0 * Dv0[0] + v0 * Dv0[1] + w0 * Dv0[2]); 
+               Fe_3_add[i] = Fe_3_add[i] + density * Sv[i][k] * (u0 * Dw0[0] + v0 * Dw0[1] + w0 * Dw0[2]);
+               for (j=0; j<NENv; j++) {
+                  Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
+                        2 * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                        density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) +
+                        density * Sv[i][k] * Sv[j][k] * Du0[0] ;                    
+                  
+                        
+                  Ke_12_add[i][j] = Ke_12_add[i][j] + viscosity * gDSv[e][1][i][k] * gDSv[e][0][j][k] +
+                        density * Sv[i][k] * Sv[j][k] * Du0[1] ;
+                  
+                  Ke_13_add[i][j] = Ke_13_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][0][j][k] +
+                        density * Sv[i][k] * Sv[j][k] * Du0[2] ;
+                        
+                  Ke_21_add[i][j] = Ke_21_add[i][j] + viscosity * gDSv[e][1][i][k] * gDSv[e][0][j][k] +
+                        density * Sv[i][k] * Sv[j][k] * Dv0[0] ;     
+                  
+                  Ke_22_add[i][j] = Ke_22_add[i][j] + viscosity * (
+                        gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                        2 * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                        density * Sv[i][k]  * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k])+
+                        density * Sv[i][k] * Sv[j][k] * Dv0[1] ;
+                                     
+                        
+                  Ke_23_add[i][j] = Ke_23_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][1][j][k] +
+                        density * Sv[i][k] * Sv[j][k] * Dv0[2] ;
+                  
+                  Ke_31_add[i][j] = Ke_31_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][0][j][k] +
+                        density * Sv[i][k] * Sv[j][k] * Dw0[0] ;
+                        
+                  Ke_32_add[i][j] = Ke_32_add[i][j] + viscosity * gDSv[e][2][i][k] * gDSv[e][1][j][k] +
+                        density * Sv[i][k] * Sv[j][k] * Dw0[1] ;      
+                  
+                  Ke_33_add[i][j] = Ke_33_add[i][j] + viscosity * (
+                        gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                        2 * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                        density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) +
+                        density * Sv[i][k] * Sv[j][k] * Dw0[2] ;                               
+               }
+               for (j=0; j<NENp; j++) {
+                  Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][0][i][k] * Sp[j][k];
+                  Ke_24_add[i][j] = Ke_24_add[i][j] - gDSv[e][1][i][k] * Sp[j][k];
+                  Ke_34_add[i][j] = Ke_34_add[i][j] - gDSv[e][2][i][k] * Sp[j][k];
+               }         
             }
+            
+            for (i=0; i<NENv; i++) {
+               for (j=0; j<NENp; j++) {
+                  Ke_41_add[j][i] = Ke_14_add[i][j] ;
+                  Ke_42_add[j][i] = Ke_24_add[i][j] ;
+                  Ke_43_add[j][i] = Ke_34_add[i][j] ;
+               }
+            }
+
          }
 
   // Apply GLS stabilization for linear elements with NENv = NENp
@@ -1254,7 +1369,7 @@ void calcGlobalSys()
             }
          }
          
-         //-------------------------------------------------------------------------  
+         //-------------------------------------------------------------------------   
 
             
          for (i=0; i<NENv; i++) {
@@ -1262,15 +1377,21 @@ void calcGlobalSys()
                Ke_11[i][j] += Ke_11_add[i][j] * detJacob[e][k] * GQweight[k];
                Ke_12[i][j] += Ke_12_add[i][j] * detJacob[e][k] * GQweight[k];
                Ke_13[i][j] += Ke_13_add[i][j] * detJacob[e][k] * GQweight[k];
+               Ke_21[i][j] += Ke_21_add[i][j] * detJacob[e][k] * GQweight[k];
                Ke_22[i][j] += Ke_22_add[i][j] * detJacob[e][k] * GQweight[k];
                Ke_23[i][j] += Ke_23_add[i][j] * detJacob[e][k] * GQweight[k];
+               Ke_31[i][j] += Ke_31_add[i][j] * detJacob[e][k] * GQweight[k];
+               Ke_32[i][j] += Ke_32_add[i][j] * detJacob[e][k] * GQweight[k];
                Ke_33[i][j] += Ke_33_add[i][j] * detJacob[e][k] * GQweight[k];
             }
             for (j=0; j<NENp; j++) {               
                Ke_14[i][j] += Ke_14_add[i][j] * detJacob[e][k] * GQweight[k];
                Ke_24[i][j] += Ke_24_add[i][j] * detJacob[e][k] * GQweight[k];
                Ke_34[i][j] += Ke_34_add[i][j] * detJacob[e][k] * GQweight[k];
-            }
+            }    
+            Fe_1[i] +=  Fe_1_add[i] * detJacob[e][k] * GQweight[k];
+            Fe_2[i] +=  Fe_2_add[i] * detJacob[e][k] * GQweight[k];
+            Fe_3[i] +=  Fe_3_add[i] * detJacob[e][k] * GQweight[k];
          }
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
@@ -1349,7 +1470,7 @@ void calcGlobalSys()
       for (m=0; m<NENv; m++) {
          j=0;
          for (n=0; n<NENv; n++) {  
-            Ke[i][j] =  Ke_12[n][m];
+            Ke[i][j] =  Ke_21[m][n];
             j++;
          }
          i++;
@@ -1388,7 +1509,7 @@ void calcGlobalSys()
       for (m=0; m<NENv; m++) {
          j=0;
          for (n=0; n<NENv; n++) {       
-            Ke[i][j] =  Ke_13[n][m];
+            Ke[i][j] =  Ke_31[m][n];
             j++;
          }
          i++;
@@ -1398,7 +1519,7 @@ void calcGlobalSys()
       for (m=0; m<NENv; m++) {
          j=0;
          for (n=0; n<NENv; n++) {       
-            Ke[i][j+NENv] =  Ke_23[n][m];
+            Ke[i][j+NENv] =  Ke_32[m][n];
             j++;
          }
          i++;
@@ -1502,7 +1623,7 @@ void assemble(int e, double **Ke, double *Fe)
    int *nodeData, p, q, k;
    // int *nodeDataEBC;
     
-   // nodeDataEBC = new int[NENv];     // Elemental node data(LtoG data) (modified with EBC)    // BC implementationu sonraya býrak ineff ama bir anda zor
+   // nodeDataEBC = new int[NENv];     // Elemental node data(LtoG data) (modified with EBC)    // BC implementationu sonraya byrak ineff ama bir anda zor
    nodeData = new int[NENv];           // Stores sorted LtoG data
    for(k=0; k<NENv; k++) {
       nodeData[k] = (LtoG[e][k]);      // Takes node data from LtoG
@@ -1545,10 +1666,10 @@ void assemble(int e, double **Ke, double *Fe)
             }
          }
       }
-   }         
-   
+   }   
+
    delete[] nodeData;
-      
+   
 } // End of function assemble()
 
 
@@ -1692,7 +1813,7 @@ void solve()
 //------------------------------------------------------------------------------
 {
    bool err;
-   int i, j, iter;
+   int i, j;
    double newError, maxError;
 
 
@@ -1722,10 +1843,10 @@ void solve()
    }
    
 
-   cout << endl << "Picard Iter No.       Max. error in velocity";
+   cout << endl << "Newton Iter No.       Max. error in velocity";
    cout << endl << "============================================" << endl;
 
-   // Picard Iterations for solution convergence
+   // Newton Linearization for solution convergence
 
    for (iter=1; iter < nonlinearIterMax; iter++) {
    
