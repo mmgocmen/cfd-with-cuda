@@ -1467,13 +1467,25 @@ void calcGlobalSys()
          i++;
       }
       
-      for (m=0; m<NENv; m++) {
-         j=0;
-         for (n=0; n<NENv; n++) {  
-            Ke[i][j] =  Ke_21[m][n];
-            j++;
+      if (iter==1) {
+         for (m=0; m<NENv; m++) {
+            j=0;
+            for (n=0; n<NENv; n++) {  
+               Ke[i][j] =  Ke_12[n][m];
+               j++;
+            }
+            i++;
          }
-         i++;
+      }
+      else {
+            for (m=0; m<NENv; m++) {
+               j=0;
+               for (n=0; n<NENv; n++) {  
+                  Ke[i][j] =  Ke_21[m][n];
+                  j++;
+               }
+            i++;
+            }
       }
 
       i=i-NENv;
@@ -1506,24 +1518,49 @@ void calcGlobalSys()
          i++;
       }
 
-      for (m=0; m<NENv; m++) {
-         j=0;
-         for (n=0; n<NENv; n++) {       
-            Ke[i][j] =  Ke_31[m][n];
-            j++;
-         }
-         i++;
-      }      
+      if (iter==1) {
+         for (m=0; m<NENv; m++) {
+            j=0;
+            for (n=0; n<NENv; n++) {       
+               Ke[i][j] =  Ke_13[n][m];
+               j++;
+            }
+            i++;
+         }   
+      }
+      else {
+         for (m=0; m<NENv; m++) {
+            j=0;
+            for (n=0; n<NENv; n++) {       
+               Ke[i][j] =  Ke_31[m][n];
+               j++;
+            }
+            i++;
+         }  
+      }
 
-      i=i-NENv;
-      for (m=0; m<NENv; m++) {
-         j=0;
-         for (n=0; n<NENv; n++) {       
-            Ke[i][j+NENv] =  Ke_32[m][n];
-            j++;
-         }
-         i++;
-      } 
+      if (iter==1) {
+         i=i-NENv;
+         for (m=0; m<NENv; m++) {
+            j=0;
+            for (n=0; n<NENv; n++) {       
+               Ke[i][j+NENv] =  Ke_23[n][m];
+               j++;
+            }
+            i++;
+         }  
+      }
+      else {      
+         i=i-NENv;
+         for (m=0; m<NENv; m++) {
+            j=0;
+            for (n=0; n<NENv; n++) {       
+               Ke[i][j+NENv] =  Ke_32[m][n];
+               j++;
+            }
+            i++;
+         } 
+      }
 
       i=i-NENv;
       for (m=0; m<NENv; m++) {
