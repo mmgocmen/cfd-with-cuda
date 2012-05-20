@@ -1705,6 +1705,11 @@ void assemble(int e, double **Ke, double *Fe)
       }
    }   
 
+   for (int i = 0; i<NENv; i++) {   //deleting the unnecessary arrays for future
+      delete[] KeKMapSmall[i];
+   }
+   delete[] KeKMapSmall;
+
    delete[] nodeData;
    
 } // End of function assemble()
@@ -2112,6 +2117,9 @@ void gaussElimination(int N, real **K, real *F, real *u, bool& err)
    for (int k = 0; k < N; k++) {
       u[k] = F[indx[k]];
    }
+
+   delete[] indx;
+   delete[] scale;
 
 } // End of function gaussElimination()
 
