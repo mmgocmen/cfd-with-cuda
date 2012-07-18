@@ -44,15 +44,15 @@ double density, viscosity, fx, fy, nonlinearTol, solverTol;
 int **LtoG, **velNodes, **pressureNodes;
 double **coord;
 int nBC, nVelNodes, nPressureNodes;
+double *elem_he;
 double *BCtype, **BCstrings;
 double axyFunc, fxyFunc;
 double **GQpoint, *GQweight;
 double **Sp, ***DSp, **Sv, ***DSv;
 double **detJacob, ****gDSp, ****gDSv;
 int iter;
-real **K, *F, *u, *uOld;   // Can be float or double. K is the stiffness matrix
+real *F, *u, *uOld;   // Can be float or double. K is the stiffness matrix
                            // in full storage used Gauss Elimination solver.
-int bigNumber;
 
 double *Fe, **Ke;
 double *Fe_1, *Fe_2, *Fe_3, *Fe_4, *Fe_1_add, *Fe_2_add, *Fe_3_add, *Fe_4_add;
@@ -67,6 +67,7 @@ int **GtoL, *rowStarts, *rowStartsSmall, *colSmall, *col, **KeKMapSmall, NNZ;
 real *val;
 
 void readInput();
+void calcElemSize();
 void gaussQuad();
 void calcShape();
 void calcJacobian();
@@ -76,7 +77,6 @@ void assemble(int e, double **Ke, double *Fe);
 void applyBC();
 void solve();
 void postProcess();
-void gaussElimination(int N, real **K, real *F, real *u, bool& err);
 void writeTecplotFile();
 void compressedSparseRowStorage();
 
@@ -101,6 +101,7 @@ int main()
    time (&start);     // Start measuring execution time.
 
    readInput();                   cout << "Input file is read." << endl ;
+   calcElemSize();                cout << "Element sizes are calculated. (for GLS stabilization)" << endl;
    compressedSparseRowStorage();  cout << "CSR vectors are created." << endl ;
    gaussQuad();
    calcShape();
@@ -274,6 +275,119 @@ void readInput()
    meshfile.close();
 
 } // End of function readInput()
+
+
+
+
+
+//------------------------------------------------------------------------------
+void calcElemSize()
+//------------------------------------------------------------------------------
+{
+// Calculates the diameter of the circumcircle around the tetrahedral or the
+// hexahedron. It is used for GLS stabilization.
+   int i, j, k;
+   double maxDist;
+   elem_he = new double[NE];
+
+   if (eType == 3) {
+      double *distance = new double[4];
+      double **points = new double*[8];
+      for(i=0; i<8; i++) {
+         points[i] = new double[3];
+      }      
+      
+      for (i=0; i < NE; i++) {
+
+         for (j=0; j<8; j++) {
+            for (k=0; k<3; k++) {
+               points[j][k] = coord[LtoG[i][j]][k];
+            }
+         }
+
+         distance[0] = sqrt((points[0][0]-points[6][0])*(points[0][0]-points[6][0])+
+                                        (points[0][1]-points[6][1])*(points[0][1]-points[6][1])+
+                                           (points[0][2]-points[6][2])*(points[0][2]-points[6][2]));
+                                           
+         distance[1] = sqrt((points[1][0]-points[7][0])*(points[1][0]-points[7][0])+
+                                        (points[1][1]-points[7][1])*(points[1][1]-points[7][1])+
+                                           (points[1][2]-points[7][2])*(points[1][2]-points[7][2]));         
+                                           
+         distance[2] = sqrt((points[2][0]-points[4][0])*(points[2][0]-points[4][0])+
+                                        (points[2][1]-points[4][1])*(points[2][1]-points[4][1])+
+                                           (points[2][2]-points[4][2])*(points[2][2]-points[4][2]));       
+
+         distance[3] = sqrt((points[3][0]-points[5][0])*(points[3][0]-points[5][0])+
+                                        (points[3][1]-points[5][1])*(points[3][1]-points[5][1])+
+                                           (points[3][2]-points[5][2])*(points[3][2]-points[5][2]));       
+                                           
+         maxDist = distance[0];
+         
+         for (j=1; j<4; j++) {
+            if (distance[j] > maxDist) {
+               maxDist = distance[j];
+            }
+         }
+         
+         elem_he[i] = maxDist;
+         
+      }
+      
+   }
+   else if (eType == 4) {
+      double *distance = new double[6];
+      double **points = new double*[4];
+      for(i=0; i<4; i++) {
+         points[i] = new double[3];
+      }
+      
+      for (i=0; i < NE; i++) {
+         
+         for (j=0; j<4; j++) {
+            for (k=0; k<3; k++) {
+               points[j][k] = coord[LtoG[i][j]][k];
+            }
+         }
+         
+         distance[0] = sqrt((points[0][0]-points[1][0])*(points[0][0]-points[1][0])+
+                                        (points[0][1]-points[1][1])*(points[0][1]-points[1][1])+
+                                           (points[0][2]-points[1][2])*(points[0][2]-points[1][2]));
+                                           
+         distance[1] = sqrt((points[0][0]-points[2][0])*(points[0][0]-points[2][0])+
+                                        (points[0][1]-points[2][1])*(points[0][1]-points[2][1])+
+                                           (points[0][2]-points[2][2])*(points[0][2]-points[2][2]));         
+                                           
+         distance[2] = sqrt((points[0][0]-points[3][0])*(points[0][0]-points[3][0])+
+                                        (points[0][1]-points[3][1])*(points[0][1]-points[3][1])+
+                                           (points[0][2]-points[3][2])*(points[0][2]-points[3][2]));       
+
+         distance[3] = sqrt((points[1][0]-points[2][0])*(points[1][0]-points[2][0])+
+                                        (points[1][1]-points[2][1])*(points[1][1]-points[2][1])+
+                                           (points[1][2]-points[2][2])*(points[1][2]-points[2][2]));       
+
+         distance[4] = sqrt((points[1][0]-points[3][0])*(points[1][0]-points[3][0])+
+                                        (points[1][1]-points[3][1])*(points[1][1]-points[3][1])+
+                                           (points[1][2]-points[3][2])*(points[1][2]-points[3][2]));                
+
+         distance[5] = sqrt((points[2][0]-points[3][0])*(points[2][0]-points[3][0])+
+                                        (points[2][1]-points[3][1])*(points[2][1]-points[3][1])+
+                                           (points[2][2]-points[3][2])*(points[2][2]-points[3][2]));                                                    
+         
+         maxDist = distance[0];
+         
+         for (j=0; j<6; j++) {
+            if (distance[j] > maxDist) {
+               maxDist = distance[j];
+            }
+         }
+         
+         elem_he[i] = maxDist;
+      
+      }         
+      
+   }
+
+}
 
 
 
@@ -688,39 +802,39 @@ void calcShape()
             eta = GQpoint[k][1];
             zeta = GQpoint[k][2];
             
-            Sp[0][k] = 0.25*(1-ksi)*(1-eta)*(1-zeta);
-            Sp[1][k] = 0.25*(1+ksi)*(1-eta)*(1-zeta);
-            Sp[2][k] = 0.25*(1+ksi)*(1+eta)*(1-zeta);
-            Sp[3][k] = 0.25*(1-ksi)*(1+eta)*(1-zeta);   
-            Sp[4][k] = 0.25*(1-ksi)*(1-eta)*(1+zeta);
-            Sp[5][k] = 0.25*(1+ksi)*(1-eta)*(1+zeta);
-            Sp[6][k] = 0.25*(1+ksi)*(1+eta)*(1+zeta);
-            Sp[7][k] = 0.25*(1-ksi)*(1+eta)*(1+zeta); 
+            Sp[0][k] = 0.125*(1-ksi)*(1-eta)*(1-zeta);
+            Sp[1][k] = 0.125*(1+ksi)*(1-eta)*(1-zeta);
+            Sp[2][k] = 0.125*(1+ksi)*(1+eta)*(1-zeta);
+            Sp[3][k] = 0.125*(1-ksi)*(1+eta)*(1-zeta);   
+            Sp[4][k] = 0.125*(1-ksi)*(1-eta)*(1+zeta);
+            Sp[5][k] = 0.125*(1+ksi)*(1-eta)*(1+zeta);
+            Sp[6][k] = 0.125*(1+ksi)*(1+eta)*(1+zeta);
+            Sp[7][k] = 0.125*(1-ksi)*(1+eta)*(1+zeta); 
 
-            DSp[0][0][k] = -0.25*(1-eta)*(1-zeta);  // ksi derivative of the 1st shape funct. at k-th GQ point.
-            DSp[1][0][k] = -0.25*(1-ksi)*(1-zeta);  // eta derivative of the 1st shape funct. at k-th GQ point.  
-            DSp[2][0][k] = -0.25*(1-ksi)*(1-eta);   // zeta derivative of the 1st shape funct. at k-th GQ point.
-            DSp[0][1][k] =  0.25*(1-eta)*(1-zeta);   
-            DSp[1][1][k] = -0.25*(1+ksi)*(1-zeta);
-            DSp[2][1][k] = -0.25*(1+ksi)*(1-eta);         
-            DSp[0][2][k] =  0.25*(1+eta)*(1-zeta);   
-            DSp[1][2][k] =  0.25*(1+ksi)*(1-zeta);
-            DSp[2][2][k] = -0.25*(1+ksi)*(1+eta);         
-            DSp[0][3][k] = -0.25*(1+eta)*(1-zeta);   
-            DSp[1][3][k] =  0.25*(1-ksi)*(1-zeta);
-            DSp[2][3][k] = -0.25*(1-ksi)*(1+eta); 
-            DSp[0][4][k] = -0.25*(1-eta)*(1+zeta); 
-            DSp[1][4][k] = -0.25*(1-ksi)*(1+zeta);  
-            DSp[2][4][k] = 0.25*(1-ksi)*(1-eta);   
-            DSp[0][5][k] =  0.25*(1-eta)*(1+zeta);   
-            DSp[1][5][k] = -0.25*(1+ksi)*(1+zeta);
-            DSp[2][5][k] = 0.25*(1+ksi)*(1-eta);         
-            DSp[0][6][k] =  0.25*(1+eta)*(1+zeta);   
-            DSp[1][6][k] =  0.25*(1+ksi)*(1+zeta);
-            DSp[2][6][k] = 0.25*(1+ksi)*(1+eta);         
-            DSp[0][7][k] = -0.25*(1+eta)*(1+zeta);   
-            DSp[1][7][k] =  0.25*(1-ksi)*(1+zeta);
-            DSp[2][7][k] = 0.25*(1-ksi)*(1+eta); 
+            DSp[0][0][k] = -0.125*(1-eta)*(1-zeta);  // ksi derivative of the 1st shape funct. at k-th GQ point.
+            DSp[1][0][k] = -0.125*(1-ksi)*(1-zeta);  // eta derivative of the 1st shape funct. at k-th GQ point.  
+            DSp[2][0][k] = -0.125*(1-ksi)*(1-eta);   // zeta derivative of the 1st shape funct. at k-th GQ point.
+            DSp[0][1][k] =  0.125*(1-eta)*(1-zeta);   
+            DSp[1][1][k] = -0.125*(1+ksi)*(1-zeta);
+            DSp[2][1][k] = -0.125*(1+ksi)*(1-eta);         
+            DSp[0][2][k] =  0.125*(1+eta)*(1-zeta);   
+            DSp[1][2][k] =  0.125*(1+ksi)*(1-zeta);
+            DSp[2][2][k] = -0.125*(1+ksi)*(1+eta);         
+            DSp[0][3][k] = -0.125*(1+eta)*(1-zeta);   
+            DSp[1][3][k] =  0.125*(1-ksi)*(1-zeta);
+            DSp[2][3][k] = -0.125*(1-ksi)*(1+eta); 
+            DSp[0][4][k] = -0.125*(1-eta)*(1+zeta); 
+            DSp[1][4][k] = -0.125*(1-ksi)*(1+zeta);  
+            DSp[2][4][k] = 0.125*(1-ksi)*(1-eta);   
+            DSp[0][5][k] =  0.125*(1-eta)*(1+zeta);   
+            DSp[1][5][k] = -0.125*(1+ksi)*(1+zeta);
+            DSp[2][5][k] = 0.125*(1+ksi)*(1-eta);         
+            DSp[0][6][k] =  0.125*(1+eta)*(1+zeta);   
+            DSp[1][6][k] =  0.125*(1+ksi)*(1+zeta);
+            DSp[2][6][k] = 0.125*(1+ksi)*(1+eta);         
+            DSp[0][7][k] = -0.125*(1+eta)*(1+zeta);   
+            DSp[1][7][k] =  0.125*(1-ksi)*(1+zeta);
+            DSp[2][7][k] = 0.125*(1-ksi)*(1+eta); 
          }
       }
       
@@ -974,10 +1088,6 @@ void initGlobalSysVariables()
    int i;
    
    F = new real[Ndof];
-   K = new real*[Ndof];	
-   for (i=0; i<Ndof; i++) {
-      K[i] = new real[Ndof];
-   }
    
    Fe = new double[NEU];
    Ke = new double*[NEU];	
@@ -1095,9 +1205,6 @@ void calcGlobalSys()
 
    for (i=0; i<Ndof; i++) {
       F[i] = 0;
-      for (j=0; j<Ndof; j++) {
-         K[i][j] = 0;
-	   }
    }
    
    // Calculating the elemental stiffness matrix(Ke) and force vector(Fe)
@@ -1318,7 +1425,7 @@ void calcGlobalSys()
 
   // Apply GLS stabilization for linear elements with NENv = NENp
     
-         Tau = (1.0/12.0) / viscosity;  // GLS parameter
+         Tau = (1.0/12.0)*elem_he[e]*elem_he[e] / viscosity;  // GLS parameter
 
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
@@ -1636,21 +1743,15 @@ void calcGlobalSys()
 void assemble(int e, double **Ke, double *Fe)
 //------------------------------------------------------------------------------
 {
-   // Inserts Ke and Fe into proper locations of K and F.
+   // Inserts Fe into proper locations of F.
 
-   int i, j, m, n, iG, jG; 
+   int i, j, iG, jG; 
    
-   // Inserts [Ke] and {Fe} into proper locations of [K] and {F} by the help of LtoG array. 
+   // Inserts {Fe} into proper locations of {F} by the help of LtoG array. 
    
    for (i = 0; i<NEU; i++) {
-         
       iG = LtoG[e][i%NENv] + NN*(i/NENv);
       F[iG] = F[iG] + Fe[i];
-      
-      for (j = 0; j<NEU; j++) {   
-         jG = LtoG[e][j%NENv] + NN*(j/NENv);
-         K[iG][jG] = K[iG][jG] + Ke[i][j];
-      }
    }   
 
    // Assembly process for compressed sparse storage 
@@ -1704,7 +1805,7 @@ void assemble(int e, double **Ke, double *Fe)
          }
       }
    }   
-
+   
    for (int i = 0; i<NENv; i++) {   //deleting the unnecessary arrays for future
       delete[] KeKMapSmall[i];
    }
@@ -1729,58 +1830,7 @@ void applyBC()
    int i, j, whichBC, node ;
    double x, y, z; 
 
-   bigNumber = 1;                 //to make the sparse matrix diagonally dominant
-
-   // Modify [K] and {F} for velocity BCs. [FULL STORAGE]
-
-   for (i = 0; i<nVelNodes; i++) {
-      node = velNodes[i][0];         // Node at which this EBC is specified
-   	
-      x = coord[node][0];            // May be necessary for BCstring evaluation
-      y = coord[node][1];
-      z = coord[node][2];
-
-      whichBC = velNodes[i][1]-1;    // Number of the specified BC
-      
-      F[node] = BCstrings[whichBC][0]*bigNumber;    // Specified value of the PV
-      for (j=0; j<Ndof; j++) {
-         K[node][j] = 0.0;
-      }
-      K[node][node] = 1.0*bigNumber;
-      
-      F[node + NN] = BCstrings[whichBC][1]*bigNumber;    // Specified value of the PV
-      for (j=0; j<Ndof; j++) {
-         K[node + NN][j] = 0.0;
-      }
-      K[node + NN][node + NN] = 1.0*bigNumber;
-      
-      F[node + NN*2] = BCstrings[whichBC][2]*bigNumber;    // Specified value of the PV
-      for (j=0; j<Ndof; j++) {
-         K[node + NN*2][j] = 0.0;
-      }
-      K[node + NN*2][node + NN*2] = 1.0*bigNumber;      
-   }
-
-   // Modify [K] and {F} for pressure BCs.  
-   for (i = 0; i<nPressureNodes; i++) {
-      node = pressureNodes[i][0];         // Node at which this EBC is specified
-   	
-      x = coord[node][0];                 // May be necessary for BCstring evaluation
-      y = coord[node][1];
-      z = coord[node][2];
-
-      whichBC = pressureNodes[i][1]-1;    // Number of the specified BC   	
-      
-      F[node + NN*3] = BCstrings[whichBC][0]*bigNumber;    // Specified value of the PV
-      for (j=0; j<Ndof; j++) {
-         K[node + NN*3][j] = 0.0;
-      }
-      K[node + NN*3][node + NN*3] = 1.0*bigNumber;          
-   }
-
-    
-
-   // Modify CSR vectors for BCs [CSR STORAGE]
+   // Modify CSR vectors and {F} for BCs
    
    int p, q; 
 
@@ -1805,20 +1855,25 @@ void applyBC()
       for (j=rowStarts[node]; j<rowStarts[node+1]; j++) {
          val[j] = 0.0;
       }
-      val[ rowStarts[node] + q ] = 1 * bigNumber ;
+      val[ rowStarts[node] + q ] = 1;
+      
+      F[node] = BCstrings[whichBC][0];    // Specified value of the PV      
          
       
       for (j=rowStarts[node+NN]; j<rowStarts[node+1+NN]; j++) {
          val[j] = 0.0;
       }
-      val[ rowStarts[node + NN] + (rowStartsSmall[node+1]- rowStartsSmall[node]) + q ] = 1 * bigNumber;
+      val[ rowStarts[node + NN] + (rowStartsSmall[node+1]- rowStartsSmall[node]) + q ] = 1;
+
+      F[node + NN] = BCstrings[whichBC][1];    // Specified value of the PV      
 
       
       for (j=rowStarts[node+2*NN]; j<rowStarts[node+1+2*NN]; j++) {
          val[j] = 0.0;
       }
-      val[ rowStarts[node+2*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 2) + q ] = 1 * bigNumber;
-         
+      val[ rowStarts[node+2*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 2) + q ] = 1;
+      
+      F[node + NN*2] = BCstrings[whichBC][2];    // Specified value of the PV   
    }   
 
    // Modify CSR vectors for pressure BCs
@@ -1842,7 +1897,9 @@ void applyBC()
       for (j=rowStarts[node+3*NN]; j<rowStarts[node+1+3*NN]; j++) {
          val[j] = 0.0;
       }
-      val[ rowStarts[node+3*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 3) + q ] = 1 * bigNumber;    
+      val[ rowStarts[node+3*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 3) + q ] = 1;    
+      
+      F[node + NN*3] = BCstrings[whichBC][0];    // Specified value of the PV          
    } 
 
 } // End of function ApplyBC()
@@ -1896,8 +1953,6 @@ void solve()
       applyBC();
       #ifdef CUSP
          CUSPsolver();
-      #else
-         gaussElimination(Ndof, K, F, u, err);
       #endif
 
 
@@ -1932,8 +1987,9 @@ void solve()
          }
       }
 
-      printf("%9d                 %10.5e\n", iter, maxError);
-      
+     // printf("%9d                 %10.5e\n", iter, maxError);
+     cout << "       " << iter << "                " << maxError << endl;    
+
       if (maxError < nonlinearTol) {
          break;
       }
@@ -1955,12 +2011,7 @@ void solve()
    
    
    // Deleting the unnecessary arrays for future
-   delete[] F;   
-   
-   for (i=0; i<4*NN; i++) {
-      delete[] K[i];
-   }   
-   delete[] K;
+   delete[] F;
 
 }  // End of function solve()
 
@@ -2022,7 +2073,7 @@ void writeTecplotFile()
       y = coord[i][1];
       z = coord[i][2];  
       outputFile.precision(5);
-      outputFile << fixed << "\t" << x << " "  << y << " "  << z << " " << u[i] << " " << u[i+NN] << " " << u[i+NN*2] << " " << u[i+NN*3] << endl;
+      outputFile << scientific  << "\t" << x << " "  << y << " "  << z << " " << u[i] << " " << u[i+NN] << " " << u[i+NN*2] << " " << u[i+NN*3] << endl;
    }
 
    // Print the connectivity list
@@ -2037,89 +2088,4 @@ void writeTecplotFile()
 
    outputFile.close();
 } // End of function writeTecplotFile()
-
-
-
-
-//------------------------------------------------------------------------------
-void gaussElimination(int N, real **K, real *F, real *u, bool& err)
-//------------------------------------------------------------------------------
-{
-   // Solve system of N linear equations with N unknowns using Gaussian elimination
-   // with scaled partial pivoting.
-   // err returns true if process fails; false if it is successful.
-   
-   int *indx=new int[Ndof];
-   real *scale= new real[Ndof];
-   real maxRatio, ratio, sum;
-   int maxIndx, tmpIndx;
-    
-   for (int i = 0; i < N; i++) {
-      indx[i] = i;  // Index array initialization
-   }
-    
-   // Determine scale factors
-    
-   for (int row = 0; row < N; row++) {
-      scale[row] = abs(K[row][0]);
-      for (int col = 1; col < N; col++) {
-         if (abs(K[row][col]) > scale[row]) {
-            scale[row] = abs(K[row][col]);
-		   }
-	   }
-   }
-    
-   // Forward elimination
-    
-   for (int k = 0; k < N; k++) {
-      maxRatio = abs(K[indx[k]][k])/scale[indx[k]];
-      maxIndx = k;
-      
-      for (int i = k+1; i < N; i++) {
-         if (abs(K[indx[i]][k])/scale[indx[i]] > maxRatio) {
-            maxRatio = abs(K[indx[i]][k])/scale[indx[i]];
-            maxIndx = i;
-         }
-      }
-
-      if (maxRatio == 0) { // no pivot available
-         err = true;
-         return;
-      }
-
-      tmpIndx =indx[k];
-      indx[k]=indx[maxIndx]; 
-      indx[maxIndx] = tmpIndx;
-    
-      // Use pivot row to eliminate kth variable in "lower" rows
-
-      for (int i = k+1; i < N; i++) {
-         ratio = -K[indx[i]][k]/K[indx[k]][k];
-         for (int col = k; col <= N; col++) {
-            if (col==N)
-               F[indx[i]] += ratio*F[indx[k]];
-            else
-               K[indx[i]][col] += ratio*K[indx[k]][col];
-         }
-      }
-   }	
-    
-   // Back substitution
-
-   for (int k = N-1; k >= 0; k--) {
-      sum = 0;
-      for (int col = k+1; col < N; col++) {
-         sum += K[indx[k]][col] * F[indx[col]];
-      }
-      F[indx[k]] = (F[indx[k]] - sum)/K[indx[k]][k];
-   }
-
-   for (int k = 0; k < N; k++) {
-      u[k] = F[indx[k]];
-   }
-
-   delete[] indx;
-   delete[] scale;
-
-} // End of function gaussElimination()
 
