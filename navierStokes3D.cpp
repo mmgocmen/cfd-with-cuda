@@ -433,7 +433,7 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
 // Finding size of col vector, creation of rowStarts & rowStartsSmall
 
    rowStarts = new int[Ndof+1];   // how many non zeros at rows of [K]
-   rowStartsSmall = new int[NN];  // rowStarts for a piece of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
+   rowStartsSmall = new int[NN+1];  // rowStarts for a piece of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
    checkCol = new int[1000];      // for checking the non zero column overlaps 
                                   // stores non-zero column number for rows (must be a large enough value)
    rowStarts[0] = 0;
@@ -1205,6 +1205,10 @@ void calcGlobalSys()
 
    for (i=0; i<Ndof; i++) {
       F[i] = 0;
+   }
+
+   for(i=0; i<rowStarts[Ndof]; i++) {
+      val[i] = 0;
    }
    
    // Calculating the elemental stiffness matrix(Ke) and force vector(Fe)
