@@ -7,6 +7,8 @@
 
 using namespace std;
 
+// #define SINGLE
+
 #ifdef SINGLE
   typedef float real2;
 #else
@@ -58,13 +60,25 @@ void CUSPsolver()
 
    // Solve the linear system A * x = b with the Conjugate Gradient method
    // cusp::krylov::bicgstab(A, x, b, monitor, M);
-   int restart = 50;
+   int restart = 40;
    // cout << "Iterative solution is started." << endl;
    cusp::krylov::gmres(A, x, b, restart, monitor);
    // cout << "Iterative solution is finished." << endl;
 
    // Copy x from device back to u on host 
    thrust::copy(x.begin(), x.end(), u);
+   
+   // report solver results
+   if (monitor.converged())
+   {
+       std::cout << "Solver converged to " << monitor.relative_tolerance() << " relative tolerance";
+       std::cout << " after " << monitor.iteration_count() << " iterations";
+   }
+   else
+   {
+       std::cout << "Solver reached iteration limit " << monitor.iteration_limit() << " before converging";
+       std::cout << " to " << monitor.relative_tolerance() << " relative tolerance ";
+   }
 
    // ----------------------CONTROL------------------------
    // Print the solution to check
