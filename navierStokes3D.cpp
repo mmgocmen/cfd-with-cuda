@@ -21,6 +21,8 @@
 
 using namespace std;
 
+// #define SINGLE
+
 #ifdef SINGLE
   typedef float real;
 #else
@@ -42,8 +44,10 @@ int name, eType, NE, NN, NGP, NEU, Ndof;
 int NCN, NENv, NENp, nonlinearIterMax, solverIterMax;
 double density, viscosity, fx, fy, nonlinearTol, solverTol;
 int **LtoG, **velNodes, **pressureNodes;
+double **monitorPoints;
+int *monitorNodes;
 double **coord;
-int nBC, nVelNodes, nPressureNodes;
+int nBC, nVelNodes, nPressureNodes, nMonitorPoints; 
 double *elem_he;
 double *BCtype, **BCstrings;
 double axyFunc, fxyFunc;
@@ -79,6 +83,8 @@ void solve();
 void postProcess();
 void writeTecplotFile();
 void compressedSparseRowStorage();
+
+// #define CUSP
 
 #ifdef CUSP
    extern void CUSPsolver();
@@ -130,7 +136,7 @@ void readInput()
 {
 
    string dummy, dummy2, dummy4, dummy5;
-   int dummy3, i;
+   int dummy3, i, j;
 
    problemFile.open(problemName.c_str(), ios::in);   // Read problem name
    problemFile >> whichProblem;                                  
@@ -271,7 +277,37 @@ void readInput()
          meshfile.ignore(256, '\n'); // Ignore the rest of the line
       }
    }
-  
+   
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line  
+   meshfile >> dummy >> dummy2 >> nMonitorPoints; 
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line     
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line  
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line  
+   
+   double distance, minDistance;
+   
+   if (nMonitorPoints!=0){
+      monitorNodes = new int[nMonitorPoints];
+      monitorPoints = new double*[nMonitorPoints];
+      for (i = 0; i < nMonitorPoints; i++){
+         monitorPoints[i] = new double[3];
+      }
+      for (i = 0; i < nMonitorPoints; i++){
+         meshfile >> dummy >> monitorPoints[i][0] >> monitorPoints[i][1] >> monitorPoints[i][2];   
+         meshfile.ignore(256, '\n'); // Ignore the rest of the line
+         minDistance = 1000.0;
+         for (j=0; j<NN; j++){
+            distance = sqrt((coord[j][0]-monitorPoints[i][0])*(coord[j][0]-monitorPoints[i][0])+
+                                   (coord[j][1]-monitorPoints[i][1])*(coord[j][1]-monitorPoints[i][1])+
+                                   (coord[j][2]-monitorPoints[i][2])*(coord[j][2]-monitorPoints[i][2]));
+            if (distance < minDistance) {
+               minDistance = distance;
+               monitorNodes[i] = j;
+            }            
+         }
+      }
+   }   
+   
    meshfile.close();
 
 } // End of function readInput()
@@ -422,7 +458,7 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    } 
    
    delete[] GtoLCounter;
-   // Su anda gereksiz 0'lar olu?turuluyor. Yleride dÃ¼zeltilebilir.
+   // Su anda gereksiz 0'lar olu?turuluyor. Yleride düzeltilebilir.
    // for(i=0; i<nVelNodes; i++) {   // extracting EBC values from GtoL with making them "-1"
       // for(j=0; j<noOfColGtoL; j++) {
          // GtoL[velNodes[i][0]][j] = -1;
@@ -1944,12 +1980,9 @@ void solve()
    for (i=0; i<Ndof; i++) {
       u[i] = 0.0;
    }
-   
-
-   cout << endl << "Newton Iter No.       Max. error in velocity";
-   cout << endl << "============================================" << endl;
 
    // Newton Linearization for solution convergence
+   cout << endl;
 
    for (iter=1; iter < nonlinearIterMax; iter++) {
    
@@ -1991,8 +2024,21 @@ void solve()
          }
       }
 
-     // printf("%9d                 %10.5e\n", iter, maxError);
-     cout << "       " << iter << "                " << maxError << endl;    
+      cout << endl << "Newton Iter No.       Max. error in velocity";
+      cout << endl << "============================================" << endl;
+      // printf("%9d                 %10.5e\n", iter, maxError);
+      cout << "       " << iter << "                " << maxError << endl;
+      cout << "--------------------------------------------" << endl;
+      
+      if (nMonitorPoints > 0) {
+         cout << "Monitor Point#" << "     u              v              w              p          Node#" << endl;         
+         for (i=0; i<nMonitorPoints; i++) {
+            cout << scientific << "       " << i << "    " << u[monitorNodes[i]] << "  " << u[monitorNodes[i]+NN] 
+                 << "  " << u[monitorNodes[i]+ NN*2] << "  " <<  u[monitorNodes[i] + NN*3] <<  "    " << monitorNodes[i] << endl;
+         } 
+      }
+      cout << endl;
+     
 
       if (maxError < nonlinearTol) {
          break;
