@@ -19696,3 +19696,8 @@ Velocity BC (Node#  BC No.)
 Pressure BC (Node#  BC No.)
 ================================================
     0     3
+================================================
+nMonitorPoints : 1
+Monitor Points (Point# Coord_X Coord_Y Coord_Z) 
+================================================
+0 0.1 0.1 0.1
