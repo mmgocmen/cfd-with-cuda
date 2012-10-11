@@ -15,7 +15,7 @@ using namespace std;
   typedef double real2;
 #endif
 
-extern int   *rowStarts, *col, Ndof, NNZ, solverIterMax;
+extern int   *rowStarts, *col, Ndof, NNZ, solverIterMax, solverIter;
 extern double solverTol;
 extern real2 *u, *val, *F;
 
@@ -68,17 +68,7 @@ void CUSPsolver()
    // Copy x from device back to u on host 
    thrust::copy(x.begin(), x.end(), u);
    
-   // report solver results
-   if (monitor.converged())
-   {
-       std::cout << "Solver converged to " << monitor.relative_tolerance() << " relative tolerance";
-       std::cout << " after " << monitor.iteration_count() << " iterations";
-   }
-   else
-   {
-       std::cout << "Solver reached iteration limit " << monitor.iteration_limit() << " before converging";
-       std::cout << " to " << monitor.relative_tolerance() << " relative tolerance ";
-   }
+   solverIter = monitor.iteration_count();
 
    // ----------------------CONTROL------------------------
    // Print the solution to check

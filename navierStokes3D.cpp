@@ -41,7 +41,7 @@ string inputExtension  = ".inp";              // Change this line to specify the
 string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot).
 
 int name, eType, NE, NN, NGP, NEU, Ndof;
-int NCN, NENv, NENp, nonlinearIterMax, solverIterMax;
+int NCN, NENv, NENp, nonlinearIterMax, solverIter, solverIterMax;
 double density, viscosity, fx, fy, nonlinearTol, solverTol;
 int **LtoG, **velNodes, **pressureNodes;
 double **monitorPoints;
@@ -56,7 +56,7 @@ double **Sp, ***DSp, **Sv, ***DSv;
 double **detJacob, ****gDSp, ****gDSv;
 int iter;
 real *F, *u, *uOld;   // Can be float or double. K is the stiffness matrix
-                           // in full storage used Gauss Elimination solver.
+                      // in full storage used Gauss Elimination solver.
 
 double *Fe, **Ke;
 double *Fe_1, *Fe_2, *Fe_3, *Fe_4, *Fe_1_add, *Fe_2_add, *Fe_3_add, *Fe_4_add;
@@ -87,7 +87,7 @@ void compressedSparseRowStorage();
 // #define CUSP
 
 #ifdef CUSP
-   extern void CUSPsolver();
+   extern int CUSPsolver();
 #endif
 
 
@@ -458,7 +458,7 @@ int i, j, k, m, x, y, valGtoL, check, temp, *checkCol, noOfColGtoL, *GtoLCounter
    } 
    
    delete[] GtoLCounter;
-   // Su anda gereksiz 0'lar olu?turuluyor. Yleride düzeltilebilir.
+   // Su anda gereksiz 0'lar olu?turuluyor. Yleride d\FCzeltilebilir.
    // for(i=0; i<nVelNodes; i++) {   // extracting EBC values from GtoL with making them "-1"
       // for(j=0; j<noOfColGtoL; j++) {
          // GtoL[velNodes[i][0]][j] = -1;
@@ -1981,11 +1981,12 @@ void solve()
       u[i] = 0.0;
    }
 
-   // Newton Linearization for solution convergence
-   cout << endl;
+   cout << endl << " Iter | Max. Vel. Err. | Solver Iter | Mon Node |    Mon u    |    Mon v    |    Mon w    |    Mon p";
+   cout << endl << "========================================================================================================" << endl;
 
-   for (iter=1; iter < nonlinearIterMax; iter++) {
-   
+   // Linearization loop starts here.
+
+   for (iter=1; iter<=nonlinearIterMax; iter++) {
       calcGlobalSys();
       applyBC();
       #ifdef CUSP
@@ -2024,22 +2025,15 @@ void solve()
          }
       }
 
-      cout << endl << "Newton Iter No.       Max. error in velocity";
-      cout << endl << "============================================" << endl;
-      // printf("%9d                 %10.5e\n", iter, maxError);
-      cout << "       " << iter << "                " << maxError << endl;
-      cout << "--------------------------------------------" << endl;
-      
+      printf("%5d %14.5e %11d", iter, maxError, solverIter);
+
       if (nMonitorPoints > 0) {
-         cout << "Monitor Point#" << "     u              v              w              p          Node#" << endl;         
-         for (i=0; i<nMonitorPoints; i++) {
-            cout << scientific << "       " << i << "    " << u[monitorNodes[i]] << "  " << u[monitorNodes[i]+NN] 
-                 << "  " << u[monitorNodes[i]+ NN*2] << "  " <<  u[monitorNodes[i] + NN*3] <<  "    " << monitorNodes[i] << endl;
+         printf("%14d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[0], u[monitorNodes[0]], u[monitorNodes[0]+NN], u[monitorNodes[0]+ NN*2], u[monitorNodes[0]+ NN*3]);
+         for (i=1; i<nMonitorPoints; i++) {
+            printf("%46d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[i], u[monitorNodes[i]], u[monitorNodes[i]+NN], u[monitorNodes[i]+ NN*2], u[monitorNodes[i]+ NN*3]);
          } 
       }
-      cout << endl;
-     
-
+  
       if (maxError < nonlinearTol) {
          break;
       }
