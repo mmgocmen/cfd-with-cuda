@@ -15,6 +15,7 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
+#include <sstream>
 #include <ctime>
 #include <cmath>
 #include <algorithm>
@@ -36,11 +37,11 @@ string problemNameFile, whichProblem;
 string problemName     = "ProblemName.txt";
 string controlFile     = "Control_Output.txt";
 string inputExtension  = ".inp";
-string outputExtension = ".dat";
+string outputExtension;
 string restartExtension = "_restart.dat";
 
 int    name, eType, NE, NN, NGP, NEU, Ndof;
-int    NCN, NENv, NENp, nonlinearIterMax, solverIter, solverIterMax;
+int    NCN, NENv, NENp, nonlinearIterMax, solverIter, solverIterMax, nDATiter;
 double density, viscosity, fx, fy, nonlinearTol, solverTol;
 bool   isRestart;
 int    **LtoG, **velNodes, **pressureNodes;
@@ -114,7 +115,6 @@ int main()
    solve();
    time (&end);      // Stop measuring execution time.
 
-   writeTecplotFile();            cout << "A DAT file is created for Tecplot." << endl ;
    cout << endl << "Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
    cout << endl << "The program is terminated successfully.\nPress a key to close this window...";
 
@@ -164,6 +164,8 @@ void readInput()
    meshfile >> dummy >> dummy2 >> solverIterMax;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> solverTol;
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   meshfile >> dummy >> dummy2 >> nDATiter;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> isRestart;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
@@ -1840,8 +1842,8 @@ void applyBC()
 void solve()
 //------------------------------------------------------------------------------
 {
-   // Solves the global system of equations using either CUDA on GPU or Pardiso
-   // on CPU.
+   // Creates and solves the global system of equations in a nonlinear iteration
+   // loop using either CUDA on GPU or Pardiso on CPU.
 
    bool err;
    int i, j;
@@ -1928,11 +1930,17 @@ void solve()
       for (i=0; i<Ndof; i++) {
          uOld[i] = u[i];
       }
-      
-   }   
+
+      // Write Tecplot file
+      if(iter % nDATiter == 0 || iter == nonlinearIterMax) {
+         writeTecplotFile();
+         // cout << "A DAT file is created for Tecplot." << endl;
+      }
+
+   } // End of iter loop
    
    
-   // Giving info about convergence
+   // Give info about convergence
    if (iter > nonlinearIterMax) { 
       cout << endl << "Solution did not converge in " << nonlinearIterMax << " iterations." << endl; 
    }
@@ -2015,6 +2023,10 @@ void writeTecplotFile()
    // Write the calculated unknowns to a Tecplot file
    double x, y, z;
    int i, e;
+
+   ostringstream dummy;
+   dummy << iter;
+   outputExtension = "_" + dummy.str() + ".dat";
 
    outputFile.open((whichProblem + outputExtension).c_str(), ios::out);
    
