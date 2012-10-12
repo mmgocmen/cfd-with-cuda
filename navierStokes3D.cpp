@@ -33,14 +33,16 @@ ofstream outputFile;
 ofstream outputControl;
 
 string problemNameFile, whichProblem;
-string problemName = "ProblemName.txt";
-string controlFile = "Control_Output.txt";
-string inputExtension  = ".inp";              // Change this line to specify the extension of input file (with dot).
-string outputExtension  = ".dat";             // Change this line to specify the extension of output file (with dot).
+string problemName     = "ProblemName.txt";
+string controlFile     = "Control_Output.txt";
+string inputExtension  = ".inp";
+string outputExtension = ".dat";
+string restartExtension = "_restart.dat";
 
 int    name, eType, NE, NN, NGP, NEU, Ndof;
 int    NCN, NENv, NENp, nonlinearIterMax, solverIter, solverIterMax;
 double density, viscosity, fx, fy, nonlinearTol, solverTol;
+bool   isRestart;
 int    **LtoG, **velNodes, **pressureNodes;
 double **monitorPoints;
 int    *monitorNodes;
@@ -68,6 +70,7 @@ int    **GtoL, *rowStarts, *rowStartsSmall, *colSmall, *col, **KeKMapSmall, NNZ;
 real   *val;       // Can be float or double.
 
 void readInput();
+void readRestartFile();
 void calcElemSize();
 void gaussQuad();
 void calcShape();
@@ -161,6 +164,8 @@ void readInput()
    meshfile >> dummy >> dummy2 >> solverIterMax;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> solverTol;
+   meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   meshfile >> dummy >> dummy2 >> isRestart;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> density;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
@@ -990,6 +995,17 @@ void initGlobalSysVariables()
    
    int i;
    
+   uOld = new real[Ndof];   // Values of the unknowns from the previous nonlinear iteration
+   u = new real[Ndof];
+
+   if(isRestart) {
+      readRestartFile();
+   } else {
+      for (i=0; i<Ndof; i++) {
+         u[i] = 0.0;
+      }
+   }
+
    F = new real[Ndof];
 
    // TODO: Shouldn't all the following variables be real, but not double?
@@ -1848,13 +1864,6 @@ void solve()
    //----------------CONTROL-----------------------------
 
    
-   uOld = new real[Ndof];   // Keeps the old velocity values
-   u = new real[Ndof];
-
-   for (i=0; i<Ndof; i++) {
-      u[i] = 0.0;
-   }
-
    cout << endl << " Iter |  Max. Change  | Solver Iter | Mon Node |    Mon u    |    Mon v    |    Mon w    |    Mon p";
    cout << endl << "=======================================================================================================" << endl;
 
@@ -1895,20 +1904,20 @@ void solve()
          }
       }
 
-      printf("%5d %14.5e %12d", iter, maxChange, solverIter);
+      printf("%5d %14.5e %11d", iter, maxChange, solverIter);
 
       if (nMonitorPoints > 0) {
          printf("%13d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[0],
                                                       u[monitorNodes[0]],
-                                                      u[monitorNodes[0]+NN],
-                                                      u[monitorNodes[0]+ NN*2],
-                                                      u[monitorNodes[0]+ NN*3]);
+                                                      u[monitorNodes[0] + NN],
+                                                      u[monitorNodes[0] + NN*2],
+                                                      u[monitorNodes[0] + NN*3]);
          for (i=1; i<nMonitorPoints; i++) {
-            printf("%46d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[i],
+            printf("%45d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[i],
                                                          u[monitorNodes[i]],
-                                                         u[monitorNodes[i]+NN],
-                                                         u[monitorNodes[i]+ NN*2],
-                                                         u[monitorNodes[i]+ NN*3]);
+                                                         u[monitorNodes[i] + NN],
+                                                         u[monitorNodes[i] + NN*2],
+                                                         u[monitorNodes[i] + NN*3]);
          } 
       }
   
@@ -1955,14 +1964,46 @@ void postProcess()
          printf("%-5d %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f\n", i, coord[i][0],
                 coord[i][1], coord[i][2], u[i], u[i+NN], u[i+NN*2], u[i+NN*3]);
       }
-   }
-   else { 
+   } else { 
       for (int i = 0; i<NN; i++) { 
          printf("%-5d %18.8f %18.8f %20.8f\n", i, coord[i][0], coord[i][1], u[i]);
       }
    }   
 
 } // End of function postProcess()
+
+
+
+
+//------------------------------------------------------------------------------
+void readRestartFile()
+//------------------------------------------------------------------------------
+{
+   // Reads the restart file, which is a Tecplot DAT file
+
+   double dummy;
+   ifstream restartFile;
+   
+   restartFile.open((whichProblem + restartExtension).c_str(), ios::in);
+     
+   restartFile.ignore(256, '\n');   // Read and ignore the line
+   restartFile.ignore(256, '\n');   // Read and ignore the line
+   restartFile.ignore(256, '\n');   // Read and ignore the line
+
+   // Read u, v, w and p values
+   for (int i = 0; i<NN; i++) {
+      restartFile >> dummy >> dummy >> dummy >> u[i] >> u[i+NN] >> u[i+NN*2] >> u[i+NN*3];
+      restartFile.ignore(256, '\n');   // Ignore the rest of the line
+   }
+
+   restartFile.close();
+
+   // Set uOld to the values read from the restart file.
+   for (int i = 0; i<NN; i++) {
+      uOld[i] = u[i];
+   }
+
+} // End of function readRestartFile()
 
 
 
