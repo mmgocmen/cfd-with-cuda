@@ -460,12 +460,6 @@ void compressedSparseRowStorage()
    }
    
    delete[] GtoLCounter;
-   // TODO : Unnecessary zeros are created. Could be changed in the future.
-   // for(i=0; i<nVelNodes; i++) {   // Extracting EBC values from GtoL with making them "-1"
-      // for(j=0; j<noOfColGtoL; j++) {
-         // GtoL[velNodes[i][0]][j] = -1;
-      // }
-   // }
 
 
    // Find size of the col vector. Create rowStarts & rowStartsSmall
@@ -692,7 +686,6 @@ void calcShape()
    if (eType == 3) {     // 3D Hexahedron element
 
       if (NENp == 8) {
-
          Sp = new double*[8];
          for (int i=0; i<NGP; i++) {
             Sp[i] = new double[NGP];
@@ -774,66 +767,67 @@ void calcShape()
    
    } else if (eType == 4) {     // 3D Tetrahedron element
 
-      // TODO: For eType=3, there are checks for NENv and NENp being equal to 8. But here there are no such checks.
-      //       Hardcoded value 4 used below should be replaced with NENp and NENv.
-
-      Sp = new double*[4];
-      for (int i=0; i<NGP; i++) {
-         Sp[i] = new double[NGP];
-      }
-
-      DSp = new double **[3];
-      for (int i=0; i<3; i++) {
-         DSp[i] = new double *[4];
-         for (int j=0; j<4; j++) {
-            DSp[i][j] = new double[NGP];
+      if (NENp == 4) {
+         Sp = new double*[4];
+         for (int i=0; i<NGP; i++) {
+            Sp[i] = new double[NGP];
          }
-      }
 
-      for (int k = 0; k<NGP; k++) {
-         ksi = GQpoint[k][0];
-         eta = GQpoint[k][1];
-         zeta = GQpoint[k][2];
-
-         Sp[0][k] = 1-ksi-eta-zeta;
-         Sp[1][k] = ksi;
-         Sp[2][k] = eta;
-         Sp[3][k] = zeta;
-
-         DSp[0][0][k] = -1;   // ksi derivative of the 1st shape function at k-th GQ point.
-         DSp[1][0][k] = -1;   // eta derivative of the 1st shape function at k-th GQ point.
-         DSp[2][0][k] = -1;   // zeta derivative of the 1st shape function at k-th GQ point.
-         DSp[0][1][k] = 1;
-         DSp[1][1][k] = 0;
-         DSp[2][1][k] = 0;
-         DSp[0][2][k] = 0;
-         DSp[1][2][k] = 1;
-         DSp[2][2][k] = 0;
-         DSp[0][3][k] = 0;
-         DSp[1][3][k] = 0;
-         DSp[2][3][k] = 1;
-      }
-
-      Sv = new double*[4];
-      for (int i=0; i<NGP; i++) {
-         Sv[i] = new double[NGP];
-      }
-
-      DSv = new double **[3];
-      for (int i=0; i<3; i++) {
-         DSv[i] = new double *[4];
-         for (int j=0; j<4; j++) {
-            DSv[i][j] = new double[NGP];
+         DSp = new double **[3];
+         for (int i=0; i<3; i++) {
+            DSp[i] = new double *[4];
+            for (int j=0; j<4; j++) {
+               DSp[i][j] = new double[NGP];
+            }
          }
-      }
 
-      for (int i=0; i<NGP; i++) {
-         Sv[i] = Sp[i];
-      }
+         for (int k = 0; k<NGP; k++) {
+            ksi = GQpoint[k][0];
+            eta = GQpoint[k][1];
+            zeta = GQpoint[k][2];
 
-      for (int i=0; i<3; i++) {
-         for (int j=0; j<4; j++) {
-            DSv[i][j] = DSp[i][j];
+            Sp[0][k] = 1-ksi-eta-zeta;
+            Sp[1][k] = ksi;
+            Sp[2][k] = eta;
+            Sp[3][k] = zeta;
+
+            DSp[0][0][k] = -1;   // ksi derivative of the 1st shape function at k-th GQ point.
+            DSp[1][0][k] = -1;   // eta derivative of the 1st shape function at k-th GQ point.
+            DSp[2][0][k] = -1;   // zeta derivative of the 1st shape function at k-th GQ point.
+            DSp[0][1][k] = 1;
+            DSp[1][1][k] = 0;
+            DSp[2][1][k] = 0;
+            DSp[0][2][k] = 0;
+            DSp[1][2][k] = 1;
+            DSp[2][2][k] = 0;
+            DSp[0][3][k] = 0;
+            DSp[1][3][k] = 0;
+            DSp[2][3][k] = 1;
+         }
+      }   
+
+      if (NENv == 4) {
+         Sv = new double*[4];
+         for (int i=0; i<NGP; i++) {
+            Sv[i] = new double[NGP];
+         }
+
+         DSv = new double **[3];
+         for (int i=0; i<3; i++) {
+            DSv[i] = new double *[4];
+            for (int j=0; j<4; j++) {
+               DSv[i][j] = new double[NGP];
+            }
+         }
+
+         for (int i=0; i<NGP; i++) {
+            Sv[i] = Sp[i];
+         }
+
+         for (int i=0; i<3; i++) {
+            for (int j=0; j<4; j++) {
+               DSv[i][j] = DSp[i][j];
+            }
          }
       }
 
@@ -857,7 +851,7 @@ void calcJacobian()
    // all GQ points and derivatives of shape functions wrt global coordinates
    // x, y and z.
 
-   int e, i, j, k, x, iG; 
+   int e, i, j, k, m, iG; 
    double **e_coord;
    double **Jacob, **invJacob;
    double temp;
@@ -887,7 +881,7 @@ void calcJacobian()
       for (i=0; i<NE; i++) {
          gDSp[i] = new double**[3];
          for(j=0; j<3; j++) {
-            gDSp[i][j] = new double*[NENv];        // TODO: Should this NENv be NENp?
+            gDSp[i][j] = new double*[NENp];     
             for(k=0; k<NENp; k++) {
                gDSp[i][j][k] = new double[NGP];
             }
@@ -926,8 +920,8 @@ void calcJacobian()
             for (i = 0; i<3; i++) {
                for (j = 0; j<3; j++) {
                   temp = 0;
-                  for (x = 0; x<NENp; x++) {
-                     temp = DSp[i][x][k] * e_coord[x][j]+temp;
+                  for (m = 0; m<NENp; m++) {
+                     temp = DSp[i][m][k] * e_coord[m][j]+temp;
                   }
                   Jacob[i][j] = temp;
                }
@@ -956,8 +950,8 @@ void calcJacobian()
             for (i = 0; i<3; i++){
                for (j = 0; j<NENp; j++) {
                   temp = 0;
-                  for (x = 0; x<3; x++) {        // TODO: x is NOT a good counter name
-                     temp = invJacob[i][x] * DSp[x][j][k] + temp;
+                  for (m = 0; m<3; m++) { 
+                     temp = invJacob[i][m] * DSp[m][j][k] + temp;
                   }
                   gDSp[e][i][j][k] = temp;
                   gDSv[e][i][j][k] = gDSp[e][i][j][k];
@@ -1101,11 +1095,14 @@ void initGlobalSysVariables()
       Ke_44_add[i] = new double[NENp];
    }
    
-   uNodal = new double[NENv];    // TODO: What are these?
+   //are for easiness when calculating elemental stiffness matrix[Ke]
+   //keeping velocity values in small arrays instead of using full array
+   uNodal = new double[NENv];    
    vNodal = new double[NENv];
    wNodal = new double[NENv];
 
-   Du0 = new double[3];    // TODO: What are these?
+   //keeping rate of change of velocities in x, y, z directions.
+   Du0 = new double[3];    
    Dv0 = new double[3];
    Dw0 = new double[3];
 
@@ -1241,7 +1238,7 @@ void calcGlobalSys()
             }
          }
 
-         if (iter==1) { // uses Picard iteration for initial values 
+         if (iter<100000) { // uses Picard iteration for initial values 
          
             for (i=0; i<NENv; i++) {
                for (j=0; j<NENv; j++) {
@@ -1353,8 +1350,8 @@ void calcGlobalSys()
          }
 
          // Apply GLS stabilization for linear elements with NENv = NENp
-    
-         Tau = (1.0/12.0)*elem_he[e]*elem_he[e] / viscosity;  // GLS parameter
+         Tau = (1.0/12.0)*elem_he[e]*elem_he[e] / viscosity; // GLS parameter
+         // Tau = pow( pow( (2*pow(u0*u0+v0*v0+w0*w0 , 0.5))/elem_he[e], 2) + pow((4*viscosity)/(elem_he[e]*elem_he[e]) , 2) , -0.5);  // GLS parameter TODO new GLS parameter
 
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
@@ -1503,7 +1500,7 @@ void calcGlobalSys()
          i++;
       }
       
-      if (iter==1) {
+      if (iter<100000) {
          for (m=0; m<NENv; m++) {
             j=0;
             for (n=0; n<NENv; n++) {  
@@ -1554,7 +1551,7 @@ void calcGlobalSys()
          i++;
       }
 
-      if (iter==1) {
+      if (iter<100000) {
          for (m=0; m<NENv; m++) {
             j=0;
             for (n=0; n<NENv; n++) {       
@@ -1575,7 +1572,7 @@ void calcGlobalSys()
          }  
       }
 
-      if (iter==1) {
+      if (iter<100000) {
          i=i-NENv;
          for (m=0; m<NENv; m++) {
             j=0;
@@ -1691,22 +1688,12 @@ void assemble(int e, double **Ke, double *Fe)
    //       Is it feasible to calculate it for each element only once and store?
 
    int shiftRow, shiftCol;
-   int *nodeData, p, q, k;
-   // int *nodeDataEBC;
+   int *eLtoG, p, colCounter, k;
     
-   // nodeDataEBC = new int[NENv];     // Elemental node data(LtoG data) (modified with EBC)    // TODO: BC implementationu sonraya birak ineff ama bir anda zor.
-   nodeData = new int[NENv];           // Stores sorted LtoG data   TODO: What does sorted mean? Isn't nodeData equal to one element's LtoG? If yes change its name to eLtoG
+   eLtoG = new int[NENv];           // elemental LtoG data
    for(k=0; k<NENv; k++) {
-      nodeData[k] = (LtoG[e][k]);      // Takes node data from LtoG
+      eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
    } 
-
-   // for(i=0; i<NEN; i++) {
-      // nodeData[i]=nodeDataEBC[i];
-      // if (GtoL[nodeDataEBC[i]][0] == -1) {
-         // val[rowStarts[nodeDataEBC[i]]] = 1*bigNumber;      // TODO: Must be fixed, val[x] = 1 repeating for every element that contains the node!
-         // nodeDataEBC[i] = -1;
-      // }
-   // }
 
    KeKMapSmall = new int*[NENv];
    for(j=0; j<NENv; j++) {
@@ -1715,20 +1702,20 @@ void assemble(int e, double **Ke, double *Fe)
 
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
-         q=0;
-         for(p=rowStartsSmall[nodeData[i]]; p<rowStartsSmall[nodeData[i]+1]; p++) {  // p is the location of the col vector(col[x], p=x) 
-            if(colSmall[p] == nodeData[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
-               KeKMapSmall[i][j] = q; 
+         colCounter=0;
+         for(p=rowStartsSmall[eLtoG[i]]; p<rowStartsSmall[eLtoG[i]+1]; p++) {  // p is the location of the col vector(col[x], p=x) 
+            if(colSmall[p] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
+               KeKMapSmall[i][j] = colCounter; 
                break;
             }
-            q++;
+            colCounter++;
          }
       }
    }
 
    // Insert Ke into the val vector of CSR.
-   for(shiftRow=1; shiftRow<5; shiftRow++) {       // TODO: What are these 5's?
-      for(shiftCol=1; shiftCol<5; shiftCol++) {
+   for(shiftRow=1; shiftRow<=4; shiftRow++) {      // 4 is the number of unknowns(u,v,w,p)
+      for(shiftCol=1; shiftCol<=4; shiftCol++) {   // 4 is the number of unknowns(u,v,w,p)
          for(i=0; i<NENv; i++) {
             for(j=0; j<NENv; j++) {
                val[rowStarts[LtoG[e][i] + NN * (shiftRow-1)] + ((rowStartsSmall[LtoG[e][i]+1] -    // TODO: What is going on here? Explain on paper.
@@ -1744,7 +1731,7 @@ void assemble(int e, double **Ke, double *Fe)
    }
    delete[] KeKMapSmall;
 
-   delete[] nodeData;
+   delete[] eLtoG;
    
 } // End of function assemble()
 
@@ -1761,7 +1748,7 @@ void applyBC()
    int i, j, whichBC, node;
    //double x, y, z;
 
-   int p, q;
+   int p, colCounter;
 
    // Modify CSR vectors for velocity BCs
    for (i = 0; i<nVelNodes; i++) {
@@ -1771,21 +1758,21 @@ void applyBC()
       //y = coord[node][1];
       //z = coord[node][2];
 
-      q = 0;  // TODO: What is q? It is not a good counter name. Change it.
+      colCounter = 0;
       for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {   // p is the location of the col vector(col[x], p=x)
          if(colSmall[p] == node) {                                   // Selection process of the KeKMapSmall data from the col vector.
             break;
          }
-         q++;
+         colCounter++;
       }
 
       whichBC = velNodes[i][1]-1;         // Number of the specified BC
 
       // Modify val and F for the specified u velocity.
       for (j=rowStarts[node]; j<rowStarts[node+1]; j++) {
-         val[j] = 0.0;                    // Set non-digonal entries to 0.
+         val[j] = 0.0;                    // Set non-diagonal entries to 0.
       }
-      val[ rowStarts[node] + q ] = 1;     // Set the digonal entry to 1.
+      val[ rowStarts[node] + colCounter ] = 1;     // Set the diagonal entry to 1.
 
       F[node] = BCstrings[whichBC][0];    // Specified u velocity value.
 
@@ -1793,7 +1780,7 @@ void applyBC()
       for (j=rowStarts[node+NN]; j<rowStarts[node+1+NN]; j++) {
          val[j] = 0.0;
       }
-      val[ rowStarts[node + NN] + (rowStartsSmall[node+1]- rowStartsSmall[node]) + q ] = 1;
+      val[ rowStarts[node + NN] + (rowStartsSmall[node+1]- rowStartsSmall[node]) + colCounter ] = 1;
 
       F[node + NN] = BCstrings[whichBC][1];    // Specified v velocity value.
 
@@ -1801,7 +1788,7 @@ void applyBC()
       for (j=rowStarts[node+2*NN]; j<rowStarts[node+1+2*NN]; j++) {
          val[j] = 0.0;
       }
-      val[ rowStarts[node+2*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 2) + q ] = 1;
+      val[ rowStarts[node+2*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 2) + colCounter ] = 1;
 
       F[node + NN*2] = BCstrings[whichBC][2];    // Specified w velocity value.
    }   
@@ -1815,12 +1802,12 @@ void applyBC()
       // y = coord[node][1];
       // z = coord[node][2];
 
-      q = 0;  // TODO: What is q? It is not a good counter name. Change it.
+      colCounter = 0;
       for(p=rowStartsSmall[node]; p<rowStartsSmall[node+1]; p++) {   // p is the location of the col vector(col[x], p=x) 
          if(colSmall[p] == node) {                                   // Selection process of the KeKMapSmall data from the col vector.
             break; 
          }
-         q++;
+         colCounter++;
       }
       
       whichBC = pressureNodes[i][1] - 1;         // Number of the specified BC   	
@@ -1828,7 +1815,7 @@ void applyBC()
       for (j=rowStarts[node + 3*NN]; j<rowStarts[node+1 + 3*NN]; j++) {
          val[j] = 0.0;                           // Set non-digonal entries to 0.
       }
-      val[ rowStarts[node+3*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 3) + q ] = 1;     // Set the digonal entry to 1.
+      val[ rowStarts[node+3*NN] + ((rowStartsSmall[node+1]- rowStartsSmall[node]) * 3) + colCounter ] = 1;     // Set the digonal entry to 1.
       
       F[node + NN*3] = BCstrings[whichBC][0];    // Specified pressure value
    }
@@ -1877,6 +1864,7 @@ void solve()
       #ifdef CUSP
          CUSPsolver();
       #endif
+
       // TODO: Call Pardiso or some other CPU solver here.
 
 
@@ -1922,6 +1910,7 @@ void solve()
                                                          u[monitorNodes[i] + NN*3]);
          } 
       }
+      cout << endl;
   
       if (maxChange < nonlinearTol) {
          break;
