@@ -11,6 +11,8 @@ iterMax   : 1000
 tolerance : 1e-6
 solverIterMax : 1000
 solverTol     : 1e-10
+nDATiter  : 10
+isRestart : 0
 density   : 1.0
 viscosity : 1.0
 fx        : 0.0
