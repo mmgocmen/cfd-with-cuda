@@ -73,6 +73,17 @@ else
 end
 
 disp(' ');
+nMonitorPoints = input('number of monitor points = ');
+if nMonitorPoints > 0
+    for i=1:nMonitorPoints
+        fprintf('coordinates of point %d', i);
+        monitorPoints(i,1) = input('x coordinate = ');
+        monitorPoints(i,2) = input('y coordinate = ');
+        monitorPoints(i,3) = input('z coordinate = ');    
+    end
+end
+
+disp(' ');
 disp('********   Inputs are collected successfully   *********');
 disp(' ');
 
@@ -275,9 +286,11 @@ fprintf(outputFile,'NENv      : 8\n');
 fprintf(outputFile,'NENp      : 8\n');
 fprintf(outputFile,'NGP       : 8\n');
 fprintf(outputFile,'iterMax   : 100\n');
-fprintf(outputFile,'tolerance : 1e-5\n');
+fprintf(outputFile,'tolerance : 1e-6\n');
 fprintf(outputFile,'solverIterMax : 1000\n');
-fprintf(outputFile,'solverTol     : 1e-5\n');
+fprintf(outputFile,'solverTol     : 1e-8\n');
+fprintf(outputFile,'nDATiter  : 10\n');
+fprintf(outputFile,'isRestart : 0\n');
 fprintf(outputFile,'density   : 1.0\n');
 fprintf(outputFile,'viscosity : 1.0\n');
 fprintf(outputFile,'fx        : 0.0\n');
@@ -328,6 +341,16 @@ fprintf(outputFile,'Pressure BC (Node#  BC No.)\n');
 fprintf(outputFile,'================================================\n');
 for i=1:nPressureNodes
    fprintf(outputFile,'%5d     3\n', pressureNodes(i));
+end
+
+fprintf(outputFile,'================================================\n');
+fprintf(outputFile,'nMonitorPoints : %d\n', nMonitorPoints);
+fprintf(outputFile,'Monitor Points (Point# Coord_X Coord_Y Coord_Z)\n');
+fprintf(outputFile,'================================================\n');
+if nMonitorPoints > 0
+    for i=1:nMonitorPoints
+        fprintf(outputFile,'%5d     %f %f %f\n', i, monitorPoints(i,1), monitorPoints(i,2), monitorPoints(i,3));
+    end
 end
 
 fclose(outputFile); 
