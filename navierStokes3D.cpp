@@ -1352,6 +1352,7 @@ void calcGlobalSys()
          // Apply GLS stabilization for linear elements with NENv = NENp
          Tau = (1.0/12.0)*elem_he[e]*elem_he[e] / viscosity; // GLS parameter
          // Tau = pow( pow( (2*pow(u0*u0+v0*v0+w0*w0 , 0.5))/elem_he[e], 2) + pow((4*viscosity)/(elem_he[e]*elem_he[e]) , 2) , -0.5);  // GLS parameter TODO new GLS parameter
+         // source: "A Review of Petrov-Galerkin Stabilization Approaches and an Extension to Meshfree Methods" [Thomas-Peter Fries, Hermann G. Matthies]
 
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
