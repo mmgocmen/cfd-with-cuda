@@ -86,7 +86,11 @@ void writeTecplotFile();
 void compressedSparseRowStorage();
 
 #ifdef CUSP
-   extern int CUSPsolver();
+   extern int CUSPsolver(); 
+#endif
+
+#ifdef MKLPARDISO
+   extern int pardisoSolver(); 
 #endif
 
 
@@ -1881,7 +1885,13 @@ void solve()
          //cout << "Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
       #endif
 
-      // TODO: Call Pardiso or some other CPU solver here.
+      #ifdef MKLPARDISO
+         //cout << endl << "pardisoSolver() function is started ... " << endl;
+         //time (&start);
+         pardisoSolver();
+         //time (&end);
+         //cout << "Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
+      #endif
 
 
       //----------------CONTROL-----------------------------
