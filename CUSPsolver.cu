@@ -4,10 +4,11 @@
 #include <cusp/krylov/bicg.h>
 #include <cusp/krylov/bicgstab.h>
 #include <cusp/krylov/gmres.h>
+//#include <cusp/precond/diagonal.h>
+//#include <cusp/precond/ainv.h>
+//#include <cusp/precond/smoothed_aggregation.h>
 
 using namespace std;
-
-// #define SINGLE
 
 #ifdef SINGLE
   typedef float real2;
@@ -16,8 +17,9 @@ using namespace std;
 #endif
 
 extern int   *rowStarts, *col, Ndof, NNZ, solverIterMax, solverIter;
-extern double solverTol;
+extern double solverTol, solverNorm;
 extern real2 *u, *val, *F;
+time_t start, end;
 
 
 //-----------------------------------------------------------------------------
@@ -51,24 +53,28 @@ void CUSPsolver()
    // Copy previous solution to device memory
    thrust::copy(u, u + Ndof, x.begin());
    
-   // Set stopping criteria:
    //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
    cusp::default_monitor<real2> monitor(b, solverIterMax, solverTol);
 
-   // Set preconditioner (identity)
-   cusp::identity_operator<real2, cusp::device_memory> M(A.num_rows, A.num_rows);
+   // Set preconditioner
+   //cusp::identity_operator<real2, cusp::device_memory> M(A.num_rows, A.num_rows);
+   //cusp::precond::diagonal<real2, cusp::device_memory> M(A);
+   //cusp::precond::scaled_bridson_ainv<real2, cusp::device_memory> M(A, .1);
+   //cusp::precond::smoothed_aggregation<int, real2, cusp::device_memory> M(A);
 
-   // Solve the linear system A * x = b with the Conjugate Gradient method
-   // cusp::krylov::bicgstab(A, x, b, monitor, M);
-   int restart = 40;
-   // cout << "Iterative solution is started." << endl;
+   int restart = 20;
+   
+   //cout << "   GMRES solver is started... " << endl;
+   //time (&start);
    cusp::krylov::gmres(A, x, b, restart, monitor);
-   // cout << "Iterative solution is finished." << endl;
+   //time (&end);
+   //cout << "   Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
 
    // Copy x from device back to u on host 
    thrust::copy(x.begin(), x.end(), u);
    
    solverIter = monitor.iteration_count();
+   solverNorm = monitor.residual_norm();
 
    // ----------------------CONTROL------------------------
    // Print the solution to check
