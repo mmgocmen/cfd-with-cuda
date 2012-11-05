@@ -42,7 +42,7 @@ string restartExtension = "_restart.dat";
 
 int    name, eType, NE, NN, NGP, NEU, Ndof;
 int    NCN, NENv, NENp, nonlinearIterMax, solverIter, solverIterMax, nDATiter;
-double density, viscosity, fx, fy, nonlinearTol, solverTol;
+double density, viscosity, fx, fy, nonlinearTol, solverTol, solverNorm;
 bool   isRestart;
 int    **LtoG, **velNodes, **pressureNodes;
 double **monitorPoints;
@@ -234,7 +234,7 @@ void readInput()
    BCtype = new double[nBC];
    BCstrings = new double*[nBC];
    for (i=0; i<nBC; i++) {
-      BCstrings[i] = new double[3];
+      BCstrings[i] = new double[3];    // TODO : Later these should be strings that can have x, y and z in them.
    }   
     
    for (i = 0; i<nBC-1; i++){
@@ -1835,6 +1835,7 @@ void solve()
 
    bool err;
    int i, j;
+   //time_t start, end;
 
    //----------------CONTROL-----------------------------
 
@@ -1854,16 +1855,30 @@ void solve()
    //----------------CONTROL-----------------------------
 
    
-   cout << endl << " Iter |  Max. Change  | Solver Iter | Mon Node |    Mon u    |    Mon v    |    Mon w    |    Mon p";
-   cout << endl << "=======================================================================================================" << endl;
+   cout << endl << " Iter |  Max. Change  | Solver Iter | Solver Norm | Mon Node |    Mon u    |    Mon v    |    Mon w    |    Mon p";
+   cout << endl << "=====================================================================================================================" << endl;
 
    // Linearization loop starts here.
 
    for (iter=1; iter<=nonlinearIterMax; iter++) {
+      //cout << "Calculating the global system ... ";
+      //time (&start);
       calcGlobalSys();
+      //time (&end);
+      //cout << "Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
+
+      //cout << "Applying the BCs ... ";
+      //time (&start);
       applyBC();
+      //time (&end);
+      //cout << "Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
+
       #ifdef CUSP
+         //cout << endl << "CUSPsolver() function is started ... " << endl;
+         //time (&start);
          CUSPsolver();
+         //time (&end);
+         //cout << "Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
       #endif
 
       // TODO: Call Pardiso or some other CPU solver here.
@@ -1895,16 +1910,16 @@ void solve()
          }
       }
 
-      printf("%5d %14.5e %11d", iter, maxChange, solverIter);
+      printf("%5d %14.5e %11d %15.3e", iter, maxChange, solverIter, solverNorm);
 
       if (nMonitorPoints > 0) {
-         printf("%13d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[0],
+         printf("%11d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[0],
                                                       u[monitorNodes[0]],
                                                       u[monitorNodes[0] + NN],
                                                       u[monitorNodes[0] + NN*2],
                                                       u[monitorNodes[0] + NN*3]);
          for (i=1; i<nMonitorPoints; i++) {
-            printf("%45d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[i],
+            printf("%59d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[i],
                                                          u[monitorNodes[i]],
                                                          u[monitorNodes[i] + NN],
                                                          u[monitorNodes[i] + NN*2],
@@ -1935,7 +1950,8 @@ void solve()
       cout << endl << "Solution did not converge in " << nonlinearIterMax << " iterations." << endl; 
    }
    else {
-      cout << endl << "Convergence is achieved at " << iter << " iterations." << endl; 
+      cout << endl << "Convergence is achieved at " << iter << " iterations." << endl;
+      writeTecplotFile();
    }   
    
    
