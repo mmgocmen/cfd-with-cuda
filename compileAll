@@ -5,3 +5,11 @@ g++ -O2 -DSINGLE -o NS navierStokes3D.cpp
 
 nvcc -O2 -DCUSP -DSINGLE -o StokesCUSP Stokes3D.cpp CUSPsolver.cu
 nvcc -O2 -DCUSP -DSINGLE -o NSCUSP navierStokes3D.cpp CUSPsolver.cu
+
+nvcc -O2 -arch=sm_13 -DCUSP -o NSCUSPdouble navierStokes3D.cpp CUSPsolver.cu
+
+icc -O2 -DMKLPARDISO -mkl=parallel -o NSpardiso navierStokes3D.cpp pardisoSolver.cpp
+
+icc -O2 -DMKLPARDISO -o NSpardiso navierStokes3D.cpp pardisoSolver.cpp -I/opt/intel/mkl/include -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5
+
+
