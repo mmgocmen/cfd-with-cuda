@@ -1,0 +1,3 @@
+#!/bin/bash
+
+nvcc -O2 -arch=sm_13 -o SS_CUSP segregatedSolverCUSP.cpp CUSPsolver_momentum.cu CUSP_pressureCorrection.cu -lcublas -lcusparse
