@@ -89,6 +89,10 @@ void compressedSparseRowStorage();
    extern int CUSPsolver(); 
 #endif
 
+#ifdef CULA
+   extern int CULAsolver(); 
+#endif
+
 #ifdef MKLPARDISO
    extern int pardisoSolver(); 
 #endif
@@ -1881,6 +1885,14 @@ void solve()
          //cout << endl << "CUSPsolver() function is started ... " << endl;
          //time (&start);
          CUSPsolver();
+         //time (&end);
+         //cout << "Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
+      #endif
+
+      #ifdef CULA
+         //cout << endl << "CULAsolver() function is started ... " << endl;
+         //time (&start);
+         CULAsolver();
          //time (&end);
          //cout << "Done. Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;
       #endif
