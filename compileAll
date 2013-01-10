@@ -12,4 +12,4 @@ icc -O2 -DMKLPARDISO -mkl=parallel -o NSpardiso navierStokes3D.cpp pardisoSolver
 
 icc -O2 -DMKLPARDISO -o NSpardiso navierStokes3D.cpp pardisoSolver.cpp -I/opt/intel/mkl/include -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5
 
-
+nvcc -O2 -arch=sm_13 -DCULA -o NSCULA navierStokes3D.cpp CULAsolver.cu -L$CULASPARSE_LIB_PATH_64 -I$CULASPARSE_INC_PATH -lcula_core -lcula_sparse -lcolamd -lcublas -lcudart -lcusparse
