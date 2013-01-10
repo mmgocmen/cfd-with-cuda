@@ -751,7 +751,7 @@ void calcJacobian()
    
       for (e = 0; e<NE; e++){
          // To calculate Jacobian matrix of an element we need e_coord matrix of
-         // size NEN*2. Each row of it stores x, y & z coordinates of the nodes of
+         // size NEN*3. Each row of it stores x, y & z coordinates of the nodes of
          // an element.
          for (i = 0; i<NEN; i++){
             iG = LtoG[e][i];
@@ -795,7 +795,7 @@ void calcJacobian()
                   invJacob[i][j] = invJacob[i][j]/detJacob[e][k];
                }    
             }
-         
+            
             for (i = 0; i<3; i++){
                for (j = 0; j<8; j++){
                   temp = 0;
@@ -805,12 +805,13 @@ void calcJacobian()
                   gDS[e][i][j][k] = temp;
                }
             }
+            
          }
       }
    
    
    
-   } else {
+   } else {  // TODO : This part seems to be written for 2D, not 3D.
    e_coord = new double*[NEN];
 
    for (i=0; i<NEN; i++) {
@@ -901,7 +902,7 @@ void calcGlobalSys()
 
    int e, i, j, k, iG;
    double x, y, z, axy, fxy;
-   real *Fe, **Ke;  
+   real *Fe, **Ke;
 
    F = new real[NN];
    //K = new real*[NN];	
@@ -922,8 +923,8 @@ void calcGlobalSys()
       Ke[i] = new real[NEN];
    }
 
-
    for (e = 0; e<NE; e++) {
+
       // Intitialize Ke and Fe to zero.
       for (i=0; i<NEN; i++) {
          Fe[i] = 0;
@@ -944,7 +945,7 @@ void calcGlobalSys()
             z = z + S[i][k]*coord[iG][2];
          }
    	
-         axy = 1 + x*x;
+         axy = 1;
          fxy = 12 * M_PI * M_PI * sin(2*M_PI*x) * sin(2*M_PI*y) * sin(2*M_PI*z);
 
          for (i = 0; i<NEN; i++) {
@@ -963,7 +964,6 @@ void calcGlobalSys()
    		
       assemble(e, Ke, Fe); 	
    }
-
 
 } // End of function calcGlobalSys()
 
