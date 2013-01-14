@@ -11,6 +11,7 @@
 *****************************************************************/
 
 #include <stdio.h>
+#include <sys/time.h>
 #include <string>
 #include <iostream>
 #include <iomanip>
@@ -105,6 +106,7 @@ void solve();
 void postProcess();
 void writeTecplotFile();
 void compressedSparseRowStorage();
+double getHighResolutionTime();
 
 #define CUSP
 
@@ -125,22 +127,56 @@ int main()
    cout << "\n********************************************************\n\n";
 
    cout << "The program is started." << endl ;
+   
+   double Start, End, Start1, End1;
 
-   time_t start, end;
-   time (&start);     // Start measuring execution time.
+   Start1 = getHighResolutionTime();   
 
+   Start = getHighResolutionTime();
    readInput();                   cout << "Input file is read." << endl ;
+   End = getHighResolutionTime();
+   printf("Time for Input    = %-.4g seconds.\n", End - Start);   
+   
+   Start = getHighResolutionTime();
    calcElemSize();                cout << "Element sizes are calculated. (for GLS stabilization)" << endl;
+   End = getHighResolutionTime();
+   printf("Time for El. Size = %-.4g seconds.\n", End - Start);
+   
+   Start = getHighResolutionTime();
    compressedSparseRowStorage();  cout << "CSR vectors are created." << endl ;
-   gaussQuad();
-   calcShape();
-   calcJacobian();
-   initGlobalSysVariables();
-   solve();
+   End = getHighResolutionTime();
+   printf("Time for CSR      = %-.4g seconds.\n", End - Start);
 
-   time (&end);      // Stop measuring execution time.
-   cout << endl << "Elapsed wall clock time is " << difftime (end,start) << " seconds." << endl;  
-   cout << endl << "The program is terminated successfully.\nPress a key to close this window...";
+   Start = getHighResolutionTime();   
+   gaussQuad();
+   End = getHighResolutionTime();
+   printf("Time for GQ       = %-.4g seconds.\n", End - Start);
+
+   Start = getHighResolutionTime();
+   calcShape();
+   End = getHighResolutionTime();
+   printf("Time for Shape    = %-.4g seconds.\n", End - Start);
+   
+   Start = getHighResolutionTime();
+   calcJacobian();
+   End = getHighResolutionTime();
+   printf("Time for Jacobian = %-.4g seconds.\n", End - Start);
+
+   Start = getHighResolutionTime();
+   initGlobalSysVariables();
+   End = getHighResolutionTime();
+   printf("Time for InitVar  = %-.4g seconds.\n", End - Start);
+   
+   Start = getHighResolutionTime();
+   solve();
+   End = getHighResolutionTime();
+   printf("Time for Iter's   = %-.4g seconds.\n", End - Start);   
+
+   End1 = getHighResolutionTime();
+
+   printf("total Time        = %-.4g seconds.\n", End1 - Start1);
+
+   cout << endl << "The program is terminated successfully.\nPress a key to close this window...\n";
 
    cin.get();
    return 0;
@@ -1570,6 +1606,7 @@ void solve()
    bool err;
    int i;
    double change, maxChange;
+   double Start2, End2, Start3, End3, Start4, End4, Start5, End5;  
    
    cout << endl << "SOLVING CYCLE STARTS...";
    cout << endl << "============================================" << endl;   
@@ -1577,6 +1614,8 @@ void solve()
    for (iter=1; iter < nonlinearIterMax; iter++) {   
       cout << endl << "ITERATION NO = " << iter << endl;
       // (1) solve SCPE for pressure correction delta(p) (equations: [4a])
+      Start2 = getHighResolutionTime();      
+      Start3 = getHighResolutionTime();           
       applyBC_p();
       applyBC();          
       for (phase=0; phase<3; phase++) {
@@ -1609,16 +1648,25 @@ void solve()
       applyBC_p();
       applyBC();      
       
+      End3 = getHighResolutionTime();
+      printf("Time for calc.vec's       = %-.4g seconds.\n", End3 - Start3);    
+      
+      Start4 = getHighResolutionTime();        
       #ifdef CUSP
          CUSP_pressureCorrection();
       #endif
+      End4 = getHighResolutionTime();
+      printf("Time for CUSP op's + GMRES= %-.4g seconds.\n", End4 - Start4);      
       
+      End2 = getHighResolutionTime();
+      printf("Time for STEP 1           = %-.4g seconds.\n", End2 - Start2);           
       cout << endl << "STEP 1 is okay: delta(p)^(i+1/2) is calculated." << endl;
       // delta(p)^(i+1/2) is calculated
       //-----------------------------------------
       
       //-----------------------------------------      
       // (2) mass-adjust velocity field and increment pressure via (equations: [4b, 4c, 4d])
+      Start2 = getHighResolutionTime();      
       for (phase=0; phase<3; phase++) {      
          vectorOperationNo = 2;
          vectorProduct();
@@ -1644,12 +1692,16 @@ void solve()
       for (i=0; i<NN; i++) {
          p[i] = p[i] + (1-alpha[3]) * pPrime[i];
       }
-      cout << "STEP 2 is okay: u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i) are calculated." << endl;     
+      
+      End2 = getHighResolutionTime();
+      printf("Time for STEP 2           = %-.4g seconds.\n", End2 - Start2);         
+      cout << "STEP 2 is okay: u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i) are calculated." << endl;        
       // u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i) are calculated      
       //-----------------------------------------      
 
       //----------------------------------------- 
       // Solve x, y and z momentum equations([4e], [4f]) for u, v, w
+      Start2 = getHighResolutionTime();
       real *u_temp, *v_temp, *w_temp;
       u_temp = new real[NN];
       v_temp = new real[NN];
@@ -1734,6 +1786,8 @@ void solve()
       delete[] v_temp;
       delete[] w_temp;      
       
+      End2 = getHighResolutionTime();
+      printf("Time for STEP 3           = %-.4g seconds.\n", End2 - Start2);         
       cout << "STEP 3 is okay: u^(i+1), v^(i+1), w^(i+1) are calculated." << endl;
       // Momentum equations are solved. u^(i+1), v^(i+1), w^(i+1) are calculated.
       //-----------------------------------------      
@@ -1922,3 +1976,19 @@ void writeTecplotFile()
 
    outputFile.close();
 } // End of function writeTecplotFile()
+
+
+
+
+//-----------------------------------------------------------------------------
+double getHighResolutionTime(void)
+//-----------------------------------------------------------------------------
+{
+   // Works on Linux
+
+   struct timeval tod;
+
+   gettimeofday(&tod, NULL);
+   double time_seconds = (double) tod.tv_sec + ((double) tod.tv_usec / 1000000.0);
+   return time_seconds;
+} // End of function getHighResolutionTime()

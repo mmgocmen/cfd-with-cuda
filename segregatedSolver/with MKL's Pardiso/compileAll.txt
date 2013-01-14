@@ -1,3 +1,4 @@
 #!/bin/bash
 
-nvcc -O2 -arch=sm_13 -o SSpardiso segregatedSolverPardiso.cpp pardisoSolver_momentum.cpp pardisoSolver_deltaP.cpp CUSP_pressureCorrectionOperations.cu -lcublas -lcusparse -DMKLPARDISO -I/opt/intel/mkl/invlude -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5
+
+nvcc -O2 -arch=sm_13 -o SSpardiso segregatedSolverPardiso.cpp pardisoSolver_momentum.cpp pardisoSolver_deltaP.cpp CUSP_pressureCorrectionOperations.cu -lcublas -lcusparse -DMKLPARDISO -I/opt/intel/mkl/include -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5

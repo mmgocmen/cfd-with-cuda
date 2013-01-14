@@ -17,7 +17,7 @@ using namespace std;
   typedef double real2;
 #endif
 
-extern int *rowStartsSmall, *colSmall, NN, NNZ, solverIterMax;
+extern int *rowStartsSmall, *colSmall, NN, NNZ, solverIterMax, iter;
 extern double solverTol;
 extern real2 *uDiagonal, *vDiagonal, *wDiagonal, *u, *v, *w;
 extern real2 *Cx, *Cy, *Cz;
@@ -138,23 +138,26 @@ void CUSP_pressureCorrectionOperations()
    cusp::multiply(CxT, u_CUSP, F1);
    cusp::multiply(CyT, v_CUSP, F2);
    cusp::multiply(CzT, w_CUSP, F3);
+   
+   cusp::blas::fill(Fsum,0.0);
+   cusp::blas::axpy(F1,Fsum,-1); 
+   cusp::blas::axpy(F2,Fsum,-1); 
+   cusp::blas::axpy(F3,Fsum,-1); 
 
-   for (int i=0; i<NN; i++){
-      Fsum[i] = -1*(F1[i] + F2[i] + F3[i]);
-   }
    //----------------------------------------------
    
    
    // Copy resulting LHS and RHS vectors from device memory to host memory
-   row_deltaP = new int[NN+1];
-   col_deltaP = new int[valx.row_offsets[NN]];
-   val_deltaP = new real2[valx.row_offsets[NN]];
-
+   if (iter==1) {
+      row_deltaP = new int[NN+1];
+      col_deltaP = new int[valx.row_offsets[NN]];
+      val_deltaP = new real2[valx.row_offsets[NN]];
+      F_deltaP = new real2[NN];
+   }
+   
    thrust::copy(valx.row_offsets.begin(), valx.row_offsets.end(), row_deltaP);
    thrust::copy(valx.column_indices.begin(), valx.column_indices.end(), col_deltaP);
    thrust::copy(valx.values.begin(), valx.values.end(), val_deltaP);
-
-   F_deltaP = new real2[NN];
    thrust::copy(Fsum.begin(), Fsum.end(), F_deltaP);  
 
 }  // End of function CUSP_pressureCorrectionOperations()
