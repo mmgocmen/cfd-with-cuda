@@ -136,9 +136,10 @@ void CUSP_pressureCorrection()
    cusp::multiply(CyT, v_CUSP, F2);
    cusp::multiply(CzT, w_CUSP, F3);
 
-   for (int i=0; i<NN; i++){
-      Fsum[i] = -1*(F1[i] + F2[i] + F3[i]);
-   }
+   cusp::blas::fill(Fsum,0.0);
+   cusp::blas::axpy(F1,Fsum,-1); 
+   cusp::blas::axpy(F2,Fsum,-1); 
+   cusp::blas::axpy(F3,Fsum,-1); 
    //----------------------------------------------
    
    // Solve pressure correction equation [4a] with CUSP's GMRES
