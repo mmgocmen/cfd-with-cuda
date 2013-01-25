@@ -63,7 +63,6 @@ int iter;
 real *F, *u, *uOld, *v, *vOld, *w, *wOld, *pPrime, *p, *pOld, *velVector;   // Can be float or double. K is the stiffness matrix
                            // in full storage used Gauss Elimination solver.
 
-double *Fe, **Ke, **Ke_p;
 double **Ke_11, **Ke_14;
 double **Ke_11_add, **Ke_14_add;
 double *uNodal, *vNodal, *wNodal;
@@ -77,7 +76,7 @@ real *val, *val_f;
 
 int phase, STEP, vectorOperationNo;
 double alpha [4];
-real *uDiagonal, *vDiagonal, *wDiagonal;
+real *uDiagonal, *vDiagonal, *wDiagonal, *tempDiagonal;
 real *Cx, *Cy, *Cz;
 
 //Variables for CUDA
@@ -98,7 +97,7 @@ void calcShape();
 void calcJacobian();
 void initGlobalSysVariables();
 void calcGlobalSys();
-void assemble(int e, double **Ke, int valSwitch);
+void assemble(int e, double **Ke_11, double **Ke_14);
 void applyBC();
 void applyBC_p();
 void vectorProduct();
@@ -1058,12 +1057,6 @@ void initGlobalSysVariables()
       F[i] = 0;
    }
    
-   Fe = new double[NENv];
-   Ke = new double*[NENv];	
-   for (i=0; i<NENv; i++) {
-      Ke[i] = new double[NENv];
-   }
-   
    Ke_11 = new double*[NENv];
    Ke_14 = new double*[NENv];
    
@@ -1101,6 +1094,7 @@ void initGlobalSysVariables()
    uDiagonal = new real[NN];
    vDiagonal = new real[NN];
    wDiagonal = new real[NN];
+   tempDiagonal = new real[NN];   
    // Initial guesses for unknowns
    
    for (i=0; i<NN; i++) {
@@ -1117,7 +1111,8 @@ void initGlobalSysVariables()
       
       uDiagonal[i] = 0.0;
       vDiagonal[i] = 0.0;
-      wDiagonal[i] = 0.0;      
+      wDiagonal[i] = 0.0;    
+      tempDiagonal[i] = 0.0;      
    }  
 
    Cx = new real[rowStartsSmall[NN]];
@@ -1155,44 +1150,39 @@ void calcGlobalSys()
 
    int e, i, j, k, m, n, node, valSwitch;
    double Tau;
+   int factor[3];
+   
+   switch (phase) {
+      case 0:
+         factor[0] = 2;
+         factor[1] = 1;
+         factor[2] = 1;
+      break;
+      case 1:
+         factor[0] = 1;
+         factor[1] = 2;
+         factor[2] = 1;      
+      break;
+      case 2:
+         factor[0] = 1;
+         factor[1] = 1;
+         factor[2] = 2;      
+      break;
+   }
 
    for(i=0; i<rowStartsSmall[NN]; i++) {
       val[i] = 0;
+      val_f[i] = 0;      
    }   
-   
-   for(i=0; i<rowStartsSmall[NN]; i++) {
-      val_f[i] = 0;
-   }  
-   
-   switch (phase) {
-         case 0:
-            for(i=0; i<rowStartsDiagonal[NN]; i++) {
-               uDiagonal[i] = 0;
-            }
-            break;
-         case 1:
-            for(i=0; i<rowStartsDiagonal[NN]; i++) {
-               vDiagonal[i] = 0;
-            }
-            break;
-         case 2:
-            for(i=0; i<rowStartsDiagonal[NN]; i++) {
-               wDiagonal[i] = 0;
-            }
-            break;
-   } 
 
-   
+   for(i=0; i<rowStartsDiagonal[NN]; i++) {
+      tempDiagonal[i] = 0;
+   }
+
    // Calculating the elemental stiffness matrix(Ke) and force vector(Fe)
 
    for (e = 0; e<NE; e++) {
       // Intitialize Ke and Fe to zero.
-      for (i=0; i<NENv; i++) {
-         Fe[i] = 0;
-         for (j=0; j<NENv; j++) {
-            Ke[i][j] = 0;
-         }
-      }
 
       for (i=0; i<NENv; i++) {
          for (j=0; j<NENv; j++) {
@@ -1244,55 +1234,19 @@ void calcGlobalSys()
             }         
          }
 
-         switch (phase) {
-            case 0:
-               for (i=0; i<NENv; i++) {
-                  for (j=0; j<NENv; j++) {
-                     Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
-                           2 * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
-                           gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-                           gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
-                           density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
-                           
-                  }
-                  for (j=0; j<NENp; j++) {
-                     Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][0][i][k] * Sp[j][k];
-                  }         
-               }
-               break;
-            case 1:
-               for (i=0; i<NENv; i++) {
-                  for (j=0; j<NENv; j++) {
-                     Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
-                        gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
-                        2 * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
-                        density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
-                           
-                  }
-                  for (j=0; j<NENp; j++) {
-                     Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][1][i][k] * Sp[j][k];
-                  }         
-               }
-               break;
-            case 2:
-               for (i=0; i<NENv; i++) {
-                  for (j=0; j<NENv; j++) {
-                     Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
-                        gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
-                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-                        2 * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
-                        density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
-                           
-                  }
-                  for (j=0; j<NENp; j++) {
-                     Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][2][i][k] * Sp[j][k];
-                  }         
-               }
-               break;
-         }  
-         
-
+         for (i=0; i<NENv; i++) {
+            for (j=0; j<NENv; j++) {
+               Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
+                     factor[0] * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                     factor[1] * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                     factor[2] * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                     density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
+                     
+            }
+            for (j=0; j<NENp; j++) {
+               Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][phase][i][k] * Sp[j][k];
+            }         
+         }
          
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {            
@@ -1305,51 +1259,14 @@ void calcGlobalSys()
 
       }   // End GQ loop  
       
-   
-      // Assembly of Ke
-
-      valSwitch = 0;  
-      for (m=0; m<NENv; m++) {
-         for (n=0; n<NENv; n++) {       
-            Ke[m][n] =  Ke_11[m][n];
-         }
-      }
-      
       // Create diagonal matrices
-      
-      switch (phase) {
-         case 0:
-            for (i=0; i<NENv; i++) {
-                  uDiagonal[LtoG[e][i]] = uDiagonal[LtoG[e][i]] + Ke[i][i];
-                  Ke[i][i] += (alpha[0]/(1-alpha[0]))*Ke[i][i];
-            }
-            break;
-         case 1:
-            for (i=0; i<NENv; i++) {
-                  vDiagonal[LtoG[e][i]] = vDiagonal[LtoG[e][i]] + Ke[i][i];
-                  Ke[i][i] += (alpha[1]/(1-alpha[1]))*Ke[i][i];
-            }
-            break;
-         case 2:
-            for (i=0; i<NENv; i++) {
-                  wDiagonal[LtoG[e][i]] = wDiagonal[LtoG[e][i]] + Ke[i][i];
-                  Ke[i][i] += (alpha[2]/(1-alpha[2]))*Ke[i][i];
-            }
-            break;
+
+      for (i=0; i<NENv; i++) {
+            tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_11[i][i];
+            Ke_11[i][i] += (alpha[0]/(1-alpha[0]))*Ke_11[i][i];
       }
 
-      assemble(e, Ke, valSwitch);  // Send Ke & Fe for creating val vector
-      
-      valSwitch = 1;
-
-      for (m=0; m<NENv; m++) {
-         j=0;
-         for (n=0; n<NENp; n++) {       
-            Ke[m][n] =  Ke_14[m][n];
-         }
-      }            
-
-      assemble(e, Ke, valSwitch);  // Send Ke & Fe for creating val_f (Cx, Cy, Cz) vector       
+      assemble(e, Ke_11, Ke_14);  // Send Ke_11 and Ke_14 for creating val and val_f (Cx, Cy, Cz) vectors   
 
    }   // End element loop
  
@@ -1359,7 +1276,7 @@ void calcGlobalSys()
 
 
 //------------------------------------------------------------------------------
-void assemble(int e, double **Ke, int valSwitch)
+void assemble(int e, double **Ke_11, double **Ke_14)
 //------------------------------------------------------------------------------
 {
    // Inserts Fe into proper locations of F.
@@ -1398,24 +1315,15 @@ void assemble(int e, double **Ke, int valSwitch)
       }
    }
    
-   if (valSwitch == 0) {
    // Creating val vector
-      for(i=0; i<NENv; i++) {
-         for(j=0; j<NENv; j++) {
-            val[ rowStartsSmall[LtoG[ e ][ i ]] + KeKMapSmall[i][j]] +=
-                  Ke[i][j] ;
-         }
+   for(i=0; i<NENv; i++) {
+      for(j=0; j<NENv; j++) {
+         val[ rowStartsSmall[LtoG[ e ][ i ]] + KeKMapSmall[i][j]] += Ke_11[i][j] ;
+         
+         val_f[ rowStartsSmall[LtoG[ e ][ i ]] + KeKMapSmall[i][j]] += Ke_14[i][j] ;      
       }
-   } else {
-      for(i=0; i<NENv; i++) {
-         for(j=0; j<NENv; j++) {
-            val_f[ rowStartsSmall[LtoG[ e ][ i ]] + KeKMapSmall[i][j]] +=
-                  Ke[i][j] ;
-         }
-      } 
-   
    }
-   
+
    
    for (int i = 0; i<NENv; i++) {
       delete[] KeKMapSmall[i];
@@ -1627,21 +1535,31 @@ void solve()
       Start2 = getHighResolutionTime();      
       Start3 = getHighResolutionTime();           
       applyBC_p();
-      applyBC();          
+      applyBC();       
+  
       for (phase=0; phase<3; phase++) {
          calcGlobalSys();
          switch (phase) {
             case 0:
+               for(i=0; i<rowStartsDiagonal[NN]; i++) {
+                  uDiagonal[i] = tempDiagonal[i];
+               }
                for (i=0; i<NNZ; i++) {
                   Cx[i] = val_f[i];
                }
                break;
             case 1:
+               for(i=0; i<rowStartsDiagonal[NN]; i++) {
+                  vDiagonal[i] = tempDiagonal[i];
+               }
                for (i=0; i<NNZ; i++) {
                   Cy[i] = val_f[i];
                }     
                break;
             case 2:
+               for(i=0; i<rowStartsDiagonal[NN]; i++) {
+                  wDiagonal[i] = tempDiagonal[i];
+               }
                for (i=0; i<NNZ; i++) {
                   Cz[i] = val_f[i];
                }     
@@ -1751,17 +1669,17 @@ void solve()
          switch (phase) {
             case 0:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[0]/(1-alpha[0]))*uDiagonal[i]*u[i] + F[i];
+                  F[i]= (alpha[0]/(1-alpha[0]))*tempDiagonal[i]*u[i] + F[i];
                }
                break;
             case 1:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[1]/(1-alpha[1]))*vDiagonal[i]*v[i] + F[i];
+                  F[i]= (alpha[1]/(1-alpha[1]))*tempDiagonal[i]*v[i] + F[i];
                }  
                break;
             case 2:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[2]/(1-alpha[2]))*wDiagonal[i]*w[i] + F[i];
+                  F[i]= (alpha[2]/(1-alpha[2]))*tempDiagonal[i]*w[i] + F[i];
                }   
                break;
          }     
