@@ -142,17 +142,17 @@ int main()
    Start1 = getHighResolutionTime();   
 
    Start = getHighResolutionTime();
-   readInput();                   cout << "Input file is read." << endl ;
+   readInput();                   //cout << "Input file is read." << endl ;
    End = getHighResolutionTime();
    printf("Time for Input    = %-.4g seconds.\n", End - Start);   
    
    Start = getHighResolutionTime();
-   calcElemSize();                cout << "Element sizes are calculated. (for GLS stabilization)" << endl;
+   calcElemSize();                //cout << "Element sizes are calculated. (for GLS stabilization)" << endl;
    End = getHighResolutionTime();
    printf("Time for El. Size = %-.4g seconds.\n", End - Start);
    
    Start = getHighResolutionTime();
-   compressedSparseRowStorage();  cout << "CSR vectors are created." << endl ;
+   compressedSparseRowStorage();  //cout << "CSR vectors are created." << endl ;
    End = getHighResolutionTime();
    printf("Time for CSR      = %-.4g seconds.\n", End - Start);
 
@@ -183,11 +183,11 @@ int main()
 
    End1 = getHighResolutionTime();
 
-   printf("total Time        = %-.4g seconds.\n", End1 - Start1);
+   printf("Total Time        = %-.4g seconds.\n", End1 - Start1);
 
    cout << endl << "The program is terminated successfully.\nPress a key to close this window...\n";
 
-   cin.get();
+   //cin.get();
    return 0;
 
 } // End of function main()
@@ -1529,14 +1529,17 @@ void solve()
    cout << endl << "SOLVING CYCLE STARTS...";
    cout << endl << "============================================" << endl;   
    
-   for (iter=1; iter < nonlinearIterMax; iter++) {   
+   for (iter=1; iter < nonlinearIterMax; iter++) {
+      Start5 = getHighResolutionTime();   
       cout << endl << "ITERATION NO = " << iter << endl;
       // (1) solve SCPE for pressure correction delta(p) (equations: [4a])
       Start2 = getHighResolutionTime();      
       Start3 = getHighResolutionTime();           
       applyBC_p();
       applyBC();       
-  
+      End3 = getHighResolutionTime();
+      printf("   Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);          
+      Start3 = getHighResolutionTime();   
       for (phase=0; phase<3; phase++) {
          calcGlobalSys();
          switch (phase) {
@@ -1572,14 +1575,16 @@ void solve()
          vDiagonal[i] = 1.0/vDiagonal[i];
          wDiagonal[i] = 1.0/wDiagonal[i];
       }
+      End3 = getHighResolutionTime();
+      printf("   Time for calcGlobalSys for all      = %-.4g seconds.\n", End3 - Start3);   
       
+      Start3 = getHighResolutionTime();         
       applyBC_p();
       applyBC();      
-      
       End3 = getHighResolutionTime();
-      printf("Time for calc.vec's           = %-.4g seconds.\n", End3 - Start3);    
+      printf("   Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);    
       
-      Start4 = getHighResolutionTime();           
+      Start3 = getHighResolutionTime();           
       #ifdef CG_CUDA
          CUSP_pC_CUDA_CG();
       #endif
@@ -1589,8 +1594,8 @@ void solve()
       #ifdef CG_CUSP
          CUSP_pC_CUSP_CG();
       #endif
-      End4 = getHighResolutionTime();
-      printf("Time for CUSP op's + solver   = %-.4g seconds.\n", End4 - Start4);      
+      End3 = getHighResolutionTime();
+      printf("   Time for CUSP op's + CR solver      = %-.4g seconds.\n", End3 - Start3);      
       
       End2 = getHighResolutionTime();
       printf("Total time for STEP 1         = %-.4g seconds.\n", End2 - Start2);           
@@ -1642,74 +1647,121 @@ void solve()
       w_temp = new real[NN];
       
       for (phase=0; phase<3; phase++) {
-         calcGlobalSys();
+         Start4 = getHighResolutionTime(); 
+         Start3 = getHighResolutionTime();  
+         calcGlobalSys();  
+         
          switch (phase) {
             case 0:
                for (i=0; i<NNZ; i++) {
                   Cx[i] = val_f[i];
                }
+               End3 = getHighResolutionTime();                  
+               printf("      Time for calcGlobalSys for x        = %-.4g seconds.\n", End3 - Start3); 
                break;
             case 1:
                for (i=0; i<NNZ; i++) {
                   Cy[i] = val_f[i];
                }     
+               End3 = getHighResolutionTime();                  
+               printf("      Time for calcGlobalSys for y        = %-.4g seconds.\n", End3 - Start3); 
                break;
             case 2:
                for (i=0; i<NNZ; i++) {
                   Cz[i] = val_f[i];
                }     
+               End3 = getHighResolutionTime();                  
+               printf("      Time for calcGlobalSys for z        = %-.4g seconds.\n", End3 - Start3); 
                break;
          } 
+         
+         
+         Start3 = getHighResolutionTime();   
          applyBC_p();
          applyBC();
-         
+         End3 = getHighResolutionTime();
+         printf("      Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);   
+
+         Start3 = getHighResolutionTime();           
          vectorOperationNo = 1;
          vectorProduct();
+         End3 = getHighResolutionTime();
+         switch (phase) {
+            case 0:                 
+               printf("      Time for C_x * p (@GPU)             = %-.4g seconds.\n", End3 - Start3); 
+               break;
+            case 1:                 
+               printf("      Time for C_y * p (@GPU)             = %-.4g seconds.\n", End3 - Start3);     
+               break;
+            case 2:                
+               printf("      Time for C_z * p (@GPU)             = %-.4g seconds.\n", End3 - Start3);     
+               break;
+         }
+
          
+         Start3 = getHighResolutionTime();           
          switch (phase) {
             case 0:
                for (i=0; i<NN; i++) {
                   F[i]= (alpha[0]/(1-alpha[0]))*tempDiagonal[i]*u[i] + F[i];
                }
+               End3 = getHighResolutionTime();
+               printf("      Time for K_u(dia) * u + [C_x*p]     = %-.4g seconds.\n", End3 - Start3);                  
                break;
             case 1:
                for (i=0; i<NN; i++) {
                   F[i]= (alpha[1]/(1-alpha[1]))*tempDiagonal[i]*v[i] + F[i];
                }  
+               End3 = getHighResolutionTime();
+               printf("      Time for K_v(dia) * v + [C_y*p]     = %-.4g seconds.\n", End3 - Start3);   
                break;
             case 2:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[2]/(1-alpha[2]))*tempDiagonal[i]*w[i] + F[i];
+                  F[i]= (alpha[2]/(1-alpha[2]))*tempDiagonal[i]*w[i] + F[i]; 
                }   
+               End3 = getHighResolutionTime();
+               printf("      Time for K_w(dia) * w + [C_z*p]     = %-.4g seconds.\n", End3 - Start3);  
                break;
-         }     
+         }           
+
+         Start3 = getHighResolutionTime();   
          applyBC();
+         End3 = getHighResolutionTime();
+         printf("      Time for both applyBC's             = %-.4g seconds.\n      ", End3 - Start3);   
          
+         Start3 = getHighResolutionTime();     
          #ifdef GMRES_CUSP
             CUSP_GMRES(); // Non-sym, positive def
          #endif
          #ifdef BiCG_CUSP
             CUSP_BiCG();  // Non-sym, positive def
          #endif
-
+         End3 = getHighResolutionTime();
+         printf("\n      Time for momentum eq solver         = %-.4g seconds.", End3 - Start3);     
          switch (phase) {
             case 0:
                for (i=0; i<NN; i++) {
                   u_temp[i] = velVector[i];
                }
-               cout << endl << "   x-momentum is solved." << endl;               
+               cout << endl << "   x-momentum is solved." << endl; 
+               End4 = getHighResolutionTime();
+               printf("   Total time for solving x-momentum   = %-.4g seconds.\n", End4 - Start4);    
                break;
             case 1:
                for (i=0; i<NN; i++) {
                   v_temp[i] = velVector[i];                
                }   
-               cout << endl << "   y-momentum is solved." << endl;  
+               cout << endl << "   y-momentum is solved." << endl; 
+               End4 = getHighResolutionTime();
+               printf("   Total time for solving y-momentum   = %-.4g seconds.\n", End4 - Start4);                   
                break;
             case 2:
                for (i=0; i<NN; i++) {
                   w_temp[i] = velVector[i];                  
                }   
                cout << endl << "   z-momentum is solved." << endl;
+               End4 = getHighResolutionTime();
+               printf("   Total time for solving z-momentum   = %-.4g seconds.\n", End4 - Start4);                   
                break;
          }
       }
@@ -1727,8 +1779,9 @@ void solve()
       printf("Total time for STEP 3         = %-.4g seconds.\n", End2 - Start2);         
       cout << "STEP 3 is okay: u^(i+1), v^(i+1), w^(i+1) are calculated." << endl;
       // Momentum equations are solved. u^(i+1), v^(i+1), w^(i+1) are calculated.
-      //-----------------------------------------      
+      //-----------------------------------------
       
+      Start2 = getHighResolutionTime();   
       maxChange= pPrime[0];
 
       if (maxChange < 0) {
@@ -1746,10 +1799,12 @@ void solve()
             maxChange = change;
          }
       }
-
-      cout <<  " Iter |  Max. Change  |    Mon u    |    Mon v    |    Mon w    |    Mon p  " << endl;
-      cout <<  "============================================================================" << endl;        
-      printf("%5d %14.5e", iter, maxChange);
+      End2 = getHighResolutionTime();
+      printf("Total time for calc maxChange = %-.4g seconds.\n", End2 - Start2);  
+      End5 = getHighResolutionTime();      
+      cout <<  " Iter |   Time(sec)   |  Max. Change  |    Mon u    |    Mon v    |    Mon w    |    Mon p  " << endl;
+      cout <<  "============================================================================================" << endl;        
+      printf("%5d %10.4g %19.5e", iter, End5 - Start5, maxChange);
 
       if (nMonitorPoints > 0) {
          printf("%11d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[0],

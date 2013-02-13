@@ -11,6 +11,3 @@ nvcc -O2 -arch=sm_13 -DCG_CUDA -DGMRES_CUSP -o SS_cudaCG_GMRES segregatedSolver.
 nvcc -O2 -arch=sm_13 -DCR_CUDA -DGMRES_CUSP -o SS_cudaCR_GMRES segregatedSolver.cpp CUSP_pC_CUDA_CR.cu CUSP_GMRES.cu -lcublas -lcusparse
 
 nvcc -O2 -arch=sm_13 -DCG_CUSP -DGMRES_CUSP -o SS_cuspCG_GMRES segregatedSolver.cpp CUSP_pC_CUSP_CG.cu CUSP_GMRES.cu -lcublas -lcusparse
-
-
-nvcc -O2 -arch=sm_13 -DCR_CUDA -DGMRES_CUSP -o SS_cudaCR_GMRES segregatedSolver_time.cpp CUSP_pC_CUDA_CR_time.cu CUSP_GMRES.cu -lcublas -lcusparse
