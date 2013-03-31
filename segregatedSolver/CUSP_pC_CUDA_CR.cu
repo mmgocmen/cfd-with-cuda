@@ -29,7 +29,11 @@ extern real2 *uDiagonal, *vDiagonal, *wDiagonal, *u, *v, *w;
 extern real2 *Cx, *Cy, *Cz;
 extern real2 *F, *pPrime;
 extern int *rowStartsDiagonal, *colDiagonal;
+extern real2 *F_deltaP, *val_deltaP;
+extern int *row_deltaP, *col_deltaP;
+extern int iter;
 
+void applyBC_deltaP();
 double getHighResolutionTime();
 
 //-----------------------------------------------------------------------------
@@ -355,12 +359,13 @@ void CUSP_pC_CUDA_CR()
    
    Start6 = getHighResolutionTime();       
    // Copy resulting LHS and RHS vectors from device memory to host memory
-   int *row_deltaP, *col_deltaP;
-   real2 *val_deltaP, *F_deltaP;
-   
-   row_deltaP = new int[NN+1];
-   col_deltaP = new int[valx.row_offsets[NN]];
-   val_deltaP = new real2[valx.row_offsets[NN]];
+
+   if (iter==1){   
+      val_deltaP = new real2[valx.row_offsets[NN]];
+      F_deltaP = new real2[NN];
+      row_deltaP = new int[NN+1];
+      col_deltaP = new int[valx.row_offsets[NN]];      
+   }
 
    thrust::copy(valx.row_offsets.begin(), valx.row_offsets.end(), row_deltaP);
    thrust::copy(valx.column_indices.begin(), valx.column_indices.end(), col_deltaP);
@@ -371,13 +376,13 @@ void CUSP_pC_CUDA_CR()
       valx.swap(tmp);
    }  
    
-   F_deltaP = new real2[NN];
    thrust::copy(Fsum.begin(), Fsum.end(), F_deltaP);  
    {
       // create temporary empty matrix to delete array
       cusp::array1d<real2, cusp::device_memory> tmp(1);
       Fsum.swap(tmp);
-   }    
+   }
+   applyBC_deltaP();
    
    
    //----------------------------------------------
@@ -418,10 +423,10 @@ void CUSP_pC_CUDA_CR()
    cudaMemcpy(d_x, pPrime, NN*sizeof(real2), cudaMemcpyHostToDevice);
    cudaMemcpy(d_r, F_deltaP, NN*sizeof(real2), cudaMemcpyHostToDevice);
    
-   delete[] col_deltaP;
-   delete[] row_deltaP;
-   delete[] val_deltaP;
-   delete[] F_deltaP;
+   //delete[] col_deltaP;
+   //delete[] row_deltaP;
+   //delete[] val_deltaP;
+   //delete[] F_deltaP;
    End6 = getHighResolutionTime();   
    printf("      Time for init variables for CR      = %-.4g seconds.\n", End6 - Start6); 
 

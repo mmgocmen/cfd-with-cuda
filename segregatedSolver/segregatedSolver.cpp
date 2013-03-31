@@ -53,53 +53,49 @@ double **monitorPoints;
 int *monitorNodes;
 double **coord;
 int nBC, nVelNodes, nPressureNodes, nMonitorPoints;
-double *elem_he;
 double *BCtype, **BCstrings;
 double axyFunc, fxyFunc;
 double **GQpoint, *GQweight;
 double **Sp, ***DSp, **Sv, ***DSv;
 double **detJacob, ****gDSp, ****gDSv;
-int iter;
-real *F, *u, *uOld, *v, *vOld, *w, *wOld, *pPrime, *p, *pOld, *velVector;   // Can be float or double. K is the stiffness matrix
-                           // in full storage used Gauss Elimination solver.
 
-double **Ke_11, **Ke_14;
-double **Ke_11_add, **Ke_14_add;
+int **GtoL, *rowStartsSmall, *colSmall, **KeKMapSmall, NNZ;
+int *rowStartsDiagonal, *colDiagonal, NNZ_diagonal;
+int *KtoKdiaMap;
+
+double **Ke_11, **Ke_12, **Ke_13, **Ke_14;
+double **Ke_11_add, **Ke_12_add, **Ke_13_add, **Ke_14_add;
 double *uNodal, *vNodal, *wNodal;
 double u0, v0, w0; 
 double *Du0, *Dv0, *Dw0;
-
-int **GtoL, *rowStarts, *rowStartsSmall, *colSmall, *col, **KeKMapSmall, NNZ;
-int *rowStartsDiagonal, *colDiagonal, NNZ_diagonal;
-
-real *val, *val_f;
-
-int phase, STEP, vectorOperationNo;
-double alpha [4];
+real *F, *u, *v, *w, *pPrime, *p, *velVector;
 real *uDiagonal, *vDiagonal, *wDiagonal, *tempDiagonal;
 real *Cx, *Cy, *Cz;
+real *val, *val_f, *K_12, *K_13;
+real *val_deltaP, *F_deltaP;
+int *row_deltaP, *col_deltaP;
 
-//Variables for CUDA
-real *u_CG;
-real a, b, r0, r1; 
+int iter;
+int phase, STEP, vectorOperationNo;
+double alpha [4];
+
+//Variables for CUDA operations
 int *d_col, *d_row;
-int *d_col_dia, *d_row_dia;
-real *d_val, *d_x;
-real *d_r, *d_p, *d_Ax;
-real *d_val_dia, *d_x_dia;
-
+real *d_val, *d_x, *d_r, *d_rTemp;
 
 void readInput();
 void readRestartFile();
-void calcElemSize();
 void gaussQuad();
 void calcShape();
 void calcJacobian();
 void initGlobalSysVariables();
-void calcGlobalSys();
-void assemble(int e, double **Ke_11, double **Ke_14);
+void calcGlobalSys_p();
+void assemble_p(int e, double **Ke_11, double **Ke_14);
+void calcGlobalSys_mom();
+void assemble_mom(int e, double **Ke_11, double **Ke_12, double **Ke_13, double **Ke_14);
 void applyBC();
 void applyBC_p();
+void applyBC_deltaP();
 void vectorProduct();
 void solve();
 void postProcess();
@@ -142,17 +138,12 @@ int main()
    Start1 = getHighResolutionTime();   
 
    Start = getHighResolutionTime();
-   readInput();                   //cout << "Input file is read." << endl ;
+   readInput();             
    End = getHighResolutionTime();
-   printf("Time for Input    = %-.4g seconds.\n", End - Start);   
+   printf("Time for Input    = %-.4g seconds.\n", End - Start);
    
    Start = getHighResolutionTime();
-   calcElemSize();                //cout << "Element sizes are calculated. (for GLS stabilization)" << endl;
-   End = getHighResolutionTime();
-   printf("Time for El. Size = %-.4g seconds.\n", End - Start);
-   
-   Start = getHighResolutionTime();
-   compressedSparseRowStorage();  //cout << "CSR vectors are created." << endl ;
+   compressedSparseRowStorage(); 
    End = getHighResolutionTime();
    printf("Time for CSR      = %-.4g seconds.\n", End - Start);
 
@@ -187,7 +178,6 @@ int main()
 
    cout << endl << "The program is terminated successfully.\nPress a key to close this window...\n";
 
-   //cin.get();
    return 0;
 
 } // End of function main()
@@ -388,117 +378,6 @@ void readInput()
 
 
 
-
-//------------------------------------------------------------------------------
-void calcElemSize()
-//------------------------------------------------------------------------------
-{
-   // Calculates the diameter of the circumcircle around the tetrahedral and
-   // hexahedral elements. It is used for GLS stabilization.
-
-   int i, j, k;
-   double maxDist;
-   elem_he = new double[NE];
-
-   if (eType == 3) {    // 3D Hexahedron element
-      double *distance = new double[4];
-      double **points = new double*[8];
-      for(i=0; i<8; i++) {
-         points[i] = new double[3];
-      }      
-      
-      for (i=0; i < NE; i++) {
-
-         for (j=0; j<8; j++) {
-            for (k=0; k<3; k++) {
-               points[j][k] = coord[LtoG[i][j]][k];
-            }
-         }
-
-         distance[0] = sqrt((points[0][0]-points[6][0])*(points[0][0]-points[6][0])+
-                            (points[0][1]-points[6][1])*(points[0][1]-points[6][1])+
-                            (points[0][2]-points[6][2])*(points[0][2]-points[6][2]));
-                                           
-         distance[1] = sqrt((points[1][0]-points[7][0])*(points[1][0]-points[7][0])+
-                            (points[1][1]-points[7][1])*(points[1][1]-points[7][1])+
-                            (points[1][2]-points[7][2])*(points[1][2]-points[7][2]));         
-                                           
-         distance[2] = sqrt((points[2][0]-points[4][0])*(points[2][0]-points[4][0])+
-                            (points[2][1]-points[4][1])*(points[2][1]-points[4][1])+
-                            (points[2][2]-points[4][2])*(points[2][2]-points[4][2]));       
-
-         distance[3] = sqrt((points[3][0]-points[5][0])*(points[3][0]-points[5][0])+
-                            (points[3][1]-points[5][1])*(points[3][1]-points[5][1])+
-                            (points[3][2]-points[5][2])*(points[3][2]-points[5][2]));       
-                                           
-         maxDist = distance[0];
-         
-         for (j=1; j<4; j++) {
-            if (distance[j] > maxDist) {
-               maxDist = distance[j];
-            }
-         }
-         
-         elem_he[i] = maxDist;
-         
-      }
-      
-   }
-   else if (eType == 4) {    // 3D Tetrahedron element
-      double *distance = new double[6];
-      double **points = new double*[4];
-      for(i=0; i<4; i++) {
-         points[i] = new double[3];
-      }
-      
-      for (i=0; i < NE; i++) {
-         
-         for (j=0; j<4; j++) {
-            for (k=0; k<3; k++) {
-               points[j][k] = coord[LtoG[i][j]][k];
-            }
-         }
-         
-         distance[0] = sqrt((points[0][0]-points[1][0])*(points[0][0]-points[1][0])+
-                            (points[0][1]-points[1][1])*(points[0][1]-points[1][1])+
-                            (points[0][2]-points[1][2])*(points[0][2]-points[1][2]));
-                                           
-         distance[1] = sqrt((points[0][0]-points[2][0])*(points[0][0]-points[2][0])+
-                            (points[0][1]-points[2][1])*(points[0][1]-points[2][1])+
-                            (points[0][2]-points[2][2])*(points[0][2]-points[2][2]));         
-                                           
-         distance[2] = sqrt((points[0][0]-points[3][0])*(points[0][0]-points[3][0])+
-                            (points[0][1]-points[3][1])*(points[0][1]-points[3][1])+
-                            (points[0][2]-points[3][2])*(points[0][2]-points[3][2]));       
-
-         distance[3] = sqrt((points[1][0]-points[2][0])*(points[1][0]-points[2][0])+
-                            (points[1][1]-points[2][1])*(points[1][1]-points[2][1])+
-                            (points[1][2]-points[2][2])*(points[1][2]-points[2][2]));       
-
-         distance[4] = sqrt((points[1][0]-points[3][0])*(points[1][0]-points[3][0])+
-                            (points[1][1]-points[3][1])*(points[1][1]-points[3][1])+
-                            (points[1][2]-points[3][2])*(points[1][2]-points[3][2]));                
-
-         distance[5] = sqrt((points[2][0]-points[3][0])*(points[2][0]-points[3][0])+
-                            (points[2][1]-points[3][1])*(points[2][1]-points[3][1])+
-                            (points[2][2]-points[3][2])*(points[2][2]-points[3][2]));                                                    
-         
-         maxDist = distance[0];
-         
-         for (j=0; j<6; j++) {
-            if (distance[j] > maxDist) {
-               maxDist = distance[j];
-            }
-         }
-         elem_he[i] = maxDist;      
-      }
-   }  // Endif eType 
-
-}
-
-
-
-
 //------------------------------------------------------------------------------
 void compressedSparseRowStorage()
 //------------------------------------------------------------------------------
@@ -532,14 +411,12 @@ void compressedSparseRowStorage()
    
    delete[] GtoLCounter;
 
-
    // Find size of the col vector. Create rowStarts & rowStartsSmall
-
-   rowStarts = new int[Ndof+1];     // Stores the number of nonzeros at each rows of [K]
+                                    // Stores the number of nonzeros at each rows of [K]
    rowStartsSmall = new int[NN+1];  // rowStarts for a small part of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
    checkCol = new int[1000];        // For checking the non zero column overlaps.
                                     // Stores non-zero column number for rows (must be a large enough value)
-   rowStarts[0] = 0;
+   rowStartsSmall[0] = 0;
 
    for(i=0; i<NN; i++) {
       NNZ = 0;
@@ -571,29 +448,14 @@ void compressedSparseRowStorage()
          }
 
       }     
-      rowStarts[i+1] = NNZ + rowStarts[i];
-   }
-
-   // Create rowStarts from rowStarsSmall
-   for (i=0; i<=NN; i++) {
-      rowStartsSmall[i] = rowStarts[i];
-   }
- 
-   for (i=1; i<=NN; i++) {
-      rowStarts[i] = rowStarts[i]*4;
-   }
-   
-   for (i=1; i<=NN*3; i++) {
-      rowStarts[NN+i] = rowStarts[NN] + rowStarts[i];
+      rowStartsSmall[i+1] = NNZ + rowStartsSmall[i];
    }
    
    delete[] checkCol;
 
-
    // Create col & colSmall
 
-   col = new int[rowStarts[Ndof]];       // Stores which non zero columns at which row data  TODO: Unclear comment.
-   colSmall = new int[rowStarts[NN]/4];  // col for a part of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
+   colSmall = new int[rowStartsSmall[NN]];  // col for a part of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
 
    for(i=0; i<NN; i++) {
       NNZ = 0;
@@ -631,23 +493,7 @@ void compressedSparseRowStorage()
          }
 
       }      
-   }
-   
-   // Create col from colSmall
-   m=0;
-   for (i=0; i<NN; i++) {
-      for (k=0; k<(4*NN); k=k+NN) {
-         for (j=rowStartsSmall[i]; j<rowStartsSmall[i+1]; j++) {
-            col[m]= colSmall[j] + k;
-            m++;
-         }
-      }  
-   }   
-   
-   for (i=0; i<rowStarts[NN]*3; i++) {
-      col[i+rowStarts[NN]]=col[i];
-   }
-
+   }  
 
    NNZ = rowStartsSmall[NN];
 
@@ -655,24 +501,37 @@ void compressedSparseRowStorage()
    val = new real[rowStartsSmall[NN]];  
    
    val_f = new real[rowStartsSmall[NN]];
+   
+   K_12 = new real[rowStartsSmall[NN]]; 
+   
+   K_13 = new real[rowStartsSmall[NN]]; 
 
    // Create CSR vectors for diagonal matrix
    rowStartsDiagonal = new int[NN+1];
-   
    for(i=0; i<=NN; i++) {
       rowStartsDiagonal[i] = i;
    }
    
    colDiagonal = new int[rowStartsDiagonal[NN]];
-   
    for(i=0; i<NN; i++) {
       colDiagonal[i] = i;
    }  
    
-  for (i = 0; i<NN; i++) {
-     delete[] GtoL[i];
-  }
-  delete[] GtoL;
+   // Create K to Kdia map 
+   KtoKdiaMap = new int[NN];
+   for(i=0; i<NN; i++) {
+      for(j=rowStartsSmall[i]; j<rowStartsSmall[i+1]; j++) {
+         if(colSmall[j]==i){
+            KtoKdiaMap[i] = j;
+            break;
+         }
+      }
+   }
+   
+   for (i = 0; i<NN; i++) {
+      delete[] GtoL[i];
+   }
+   delete[] GtoL;
   
 } // End of function compressedSparseRowStorage()
 
@@ -1058,18 +917,25 @@ void initGlobalSysVariables()
    }
    
    Ke_11 = new double*[NENv];
+   Ke_12 = new double*[NENv];
+   Ke_13 = new double*[NENv];
    Ke_14 = new double*[NENv];
    
    Ke_11_add = new double*[NENv];
+   Ke_12_add = new double*[NENv];
+   Ke_13_add = new double*[NENv];   
    Ke_14_add = new double*[NENv];
 
    for (i=0; i<NENv; i++) {
       Ke_11[i] = new double[NENv];
+      Ke_12[i] = new double[NENv];
+      Ke_13[i] = new double[NENv];      
       Ke_14[i] = new double[NENp];
 
       Ke_11_add[i] = new double[NENv];
+      Ke_12_add[i] = new double[NENv];
+      Ke_13_add[i] = new double[NENv];      
       Ke_14_add[i] = new double[NENp];
-
    }
    
    uNodal = new double[NENv];
@@ -1080,38 +946,29 @@ void initGlobalSysVariables()
    Dv0 = new double[3];
    Dw0 = new double[3];   
    
-   uOld = new real[NN];   // Keeps the old velocity values
    u = new real[NN];
-   vOld = new real[NN];   // Keeps the old velocity values
    v = new real[NN];
-   wOld = new real[NN];   // Keeps the old velocity values
    w = new real[NN];
-   pOld = new real[NN];   // Keeps the old velocity values
    p = new real[NN];  
    pPrime = new real[NN];
    velVector = new real[NN];
 
    uDiagonal = new real[NN];
    vDiagonal = new real[NN];
-   wDiagonal = new real[NN];
-   tempDiagonal = new real[NN];   
-   // Initial guesses for unknowns
+   wDiagonal = new real[NN]; 
+   tempDiagonal = new real[NN];  
    
+   // Initial guesses for unknowns 
    for (i=0; i<NN; i++) {
       u[i] = 0.0;
-      uOld[i] = 0.0;
       v[i] = 0.0;
-      vOld[i] = 0.0;
       w[i] = 0.0;
-      wOld[i] = 0.0;
       p[i] = 0.0;
-      pOld[i] = 0.0;
       pPrime[i] = 0.0;
-      velVector[i] = 0.0;
-      
+      velVector[i] = 0.0; 
       uDiagonal[i] = 0.0;
       vDiagonal[i] = 0.0;
-      wDiagonal[i] = 0.0;    
+      wDiagonal[i] = 0.0;   
       tempDiagonal[i] = 0.0;      
    }  
 
@@ -1127,11 +984,10 @@ void initGlobalSysVariables()
    
    for(i=0; i<rowStartsSmall[NN]; i++) {
       val[i] = 0;
-   }   
-   
-   for(i=0; i<rowStartsSmall[NN]; i++) {
       val_f[i] = 0;
-   }     
+      K_12[i] = 0;
+      K_13[i] = 0; 
+   }    
    
    if(isRestart) {
       readRestartFile();
@@ -1142,7 +998,7 @@ void initGlobalSysVariables()
 
 
 //------------------------------------------------------------------------------
-void calcGlobalSys()
+void calcGlobalSys_p()
 //------------------------------------------------------------------------------
 {
    // Calculates Ke and Fe one by one for each element and assembles them into
@@ -1173,8 +1029,8 @@ void calcGlobalSys()
    for(i=0; i<rowStartsSmall[NN]; i++) {
       val[i] = 0;
       val_f[i] = 0;      
-   }   
-
+   }
+   
    for(i=0; i<rowStartsDiagonal[NN]; i++) {
       tempDiagonal[i] = 0;
    }
@@ -1244,7 +1100,7 @@ void calcGlobalSys()
                      
             }
             for (j=0; j<NENp; j++) {
-               Ke_14_add[i][j] = Ke_14_add[i][j] - gDSv[e][phase][i][k] * Sp[j][k];
+               Ke_14_add[i][j] = Ke_14_add[i][j] + gDSv[e][phase][i][k] * Sp[j][k];
             }         
          }
          
@@ -1257,16 +1113,16 @@ void calcGlobalSys()
             }    
          }
 
-      }   // End GQ loop  
-      
+      }   // End GQ loop 
+
       // Create diagonal matrices
 
       for (i=0; i<NENv; i++) {
-            tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_11[i][i];
-            Ke_11[i][i] += (alpha[0]/(1-alpha[0]))*Ke_11[i][i];
+         tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_11[i][i];
+         Ke_11[i][i] += (alpha[0]/(1-alpha[0]))*Ke_11[i][i];
       }
 
-      assemble(e, Ke_11, Ke_14);  // Send Ke_11 and Ke_14 for creating val and val_f (Cx, Cy, Cz) vectors   
+      assemble_p(e, Ke_11, Ke_14);  // Send Ke_11 and Ke_14 for creating val and val_f (Cx, Cy, Cz) vectors   
 
    }   // End element loop
  
@@ -1276,12 +1132,12 @@ void calcGlobalSys()
 
 
 //------------------------------------------------------------------------------
-void assemble(int e, double **Ke_11, double **Ke_14)
+void assemble_p(int e, double **Ke_11, double **Ke_14)
 //------------------------------------------------------------------------------
 {
    // Inserts Fe into proper locations of F.
 
-   int i, j, iG, jG; 
+   int i, j;
 
    // Create KeKMapSmall, which stores the mapping between the entries of Ke
    // and val vector of CSR.
@@ -1289,7 +1145,6 @@ void assemble(int e, double **Ke_11, double **Ke_14)
    // TODO: Why do we calculate KeKmapSmall in each iteration again and again? Isn't it costly?
    //       Is it feasible to calculate it for each element only once and store?
 
-   int shiftRow, shiftCol;
    int *eLtoG, loc, colCounter, k;
     
    eLtoG = new int[NENv];           // elemental LtoG data
@@ -1318,9 +1173,235 @@ void assemble(int e, double **Ke_11, double **Ke_14)
    // Creating val vector
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
-         val[ rowStartsSmall[LtoG[ e ][ i ]] + KeKMapSmall[i][j]] += Ke_11[i][j] ;
+         val[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_11[i][j] ;
          
-         val_f[ rowStartsSmall[LtoG[ e ][ i ]] + KeKMapSmall[i][j]] += Ke_14[i][j] ;      
+         val_f[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_14[i][j] ;      
+      }
+   }
+
+   
+   for (int i = 0; i<NENv; i++) {
+      delete[] KeKMapSmall[i];
+   }
+   delete[] KeKMapSmall;
+
+   delete[] eLtoG;
+   
+} // End of function assemble()
+
+
+
+
+//------------------------------------------------------------------------------
+void calcGlobalSys_mom()
+//------------------------------------------------------------------------------
+{
+   // Calculates Ke and Fe one by one for each element and assembles them into
+   // the global K and F.
+
+   int e, i, j, k, m, n, node, valSwitch;
+   double Tau;
+   real factor[3];
+   int factor2[2];
+   
+   switch (phase) {
+      case 0:
+         factor[0] = 2.0;
+         factor[1] = 1.0;
+         factor[2] = 1.0;   
+         factor2[0] = 1;
+         factor2[1] = 2;
+      break;
+      case 1:
+         factor[0] = 1.0;
+         factor[1] = 2.0;
+         factor[2] = 1.0;    
+         factor2[0] = 0;
+         factor2[1] = 2;         
+      break;
+      case 2:
+         factor[0] = 1.0;
+         factor[1] = 1.0;
+         factor[2] = 2.0; 
+         factor2[0] = 0;
+         factor2[1] = 1;       
+      break;
+   }
+
+   for(i=0; i<rowStartsSmall[NN]; i++) {
+      val[i] = 0;
+      val_f[i] = 0;      
+      K_12[i] = 0;      
+      K_13[i] = 0;
+   }
+   
+   for(i=0; i<rowStartsDiagonal[NN]; i++) {
+      tempDiagonal[i] = 0;
+   }
+
+   // Calculating the elemental stiffness matrix(Ke) and force vector(Fe)
+
+   for (e = 0; e<NE; e++) {
+      // Intitialize Ke and Fe to zero.
+
+      for (i=0; i<NENv; i++) {
+         for (j=0; j<NENv; j++) {
+            Ke_11[i][j] = 0;
+         }
+         for (j=0; j<NENv; j++) {
+            Ke_12[i][j] = 0;
+         }
+         for (j=0; j<NENp; j++) {
+            Ke_13[i][j] = 0;
+         }           
+         for (j=0; j<NENp; j++) {
+            Ke_14[i][j] = 0;
+         }         
+      }  
+      
+      for (i=0; i<NENv; i++) {
+         uNodal[i] = u[LtoG[e][i]]; 
+         vNodal[i] = v[LtoG[e][i]];
+         wNodal[i] = w[LtoG[e][i]];
+      }
+      
+      for (k = 0; k<NGP; k++) {   // Gauss quadrature loop
+            
+         u0 = 0;
+         v0 = 0;
+         w0 = 0;
+
+         for (i=0; i<3; i++) {
+            Du0[i] = 0;
+            Dv0[i] = 0;
+            Dw0[i] = 0;
+         }
+         
+         for (i=0; i<NENv; i++) {
+            u0 = u0 + Sp[i][k] * uNodal[i];
+            v0 = v0 + Sp[i][k] * vNodal[i];
+            w0 = w0 + Sp[i][k] * wNodal[i];            
+         }
+         
+         for (i=0; i<3; i++) {
+            for (j=0; j<NENv; j++) {
+               Du0[i] = Du0[i] + gDSp[e][i][j][k] * uNodal[j];
+               Dv0[i] = Dv0[i] + gDSp[e][i][j][k] * vNodal[j];
+               Dw0[i] = Dw0[i] + gDSp[e][i][j][k] * wNodal[j];
+            }
+         }
+         
+         for (i=0; i<NENv; i++) {
+            for (j=0; j<NENv; j++) {
+               Ke_11_add[i][j] = 0;
+            }
+            for (j=0; j<NENv; j++) {
+               Ke_12_add[i][j] = 0;
+            }
+            for (j=0; j<NENv; j++) {
+               Ke_13_add[i][j] = 0;
+            }
+            for (j=0; j<NENp; j++) {
+               Ke_14_add[i][j] = 0;
+            }         
+         }
+
+         for (i=0; i<NENv; i++) {
+            for (j=0; j<NENv; j++) {
+               Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
+                     factor[0] * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
+                     factor[1] * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+                     factor[2] * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
+                     density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
+                     
+               Ke_12_add[i][j] = Ke_12_add[i][j] + viscosity * gDSv[e][factor2[0]][i][k] * gDSv[e][phase][j][k];
+               
+               Ke_13_add[i][j] = Ke_13_add[i][j] + viscosity * gDSv[e][factor2[1]][i][k] * gDSv[e][phase][j][k];        
+            }
+            for (j=0; j<NENp; j++) {
+               Ke_14_add[i][j] = Ke_14_add[i][j] + gDSv[e][phase][i][k] * Sp[j][k];
+            }         
+         }
+         
+         for (i=0; i<NENv; i++) {
+            for (j=0; j<NENv; j++) {            
+               Ke_11[i][j] += Ke_11_add[i][j] * detJacob[e][k] * GQweight[k];
+            }
+            for (j=0; j<NENv; j++) {            
+               Ke_12[i][j] += Ke_12_add[i][j] * detJacob[e][k] * GQweight[k];
+            }
+            for (j=0; j<NENv; j++) {            
+               Ke_13[i][j] += Ke_13_add[i][j] * detJacob[e][k] * GQweight[k];
+            }            
+            for (j=0; j<NENp; j++) {               
+               Ke_14[i][j] += Ke_14_add[i][j] * detJacob[e][k] * GQweight[k];
+            }    
+         }
+
+      }   // End GQ loop  
+
+      // Create diagonal matrices
+
+      for (i=0; i<NENv; i++) {
+         tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_11[i][i];
+         Ke_11[i][i] += (alpha[0]/(1.0-alpha[0]))*Ke_11[i][i];
+      }      
+      
+      assemble_mom(e, Ke_11, Ke_12, Ke_13, Ke_14);  // Send Ke_11 and Ke_14 for creating val and val_f (Cx, Cy, Cz) vectors   
+
+   }   // End element loop
+ 
+} // End of function calcGlobalSys()
+
+
+
+
+//------------------------------------------------------------------------------
+void assemble_mom(int e, double **Ke_11, double **Ke_12, double **Ke_13, double **Ke_14)
+//------------------------------------------------------------------------------
+{
+   // Inserts Fe into proper locations of F.
+
+   int i, j;
+
+   // Create KeKMapSmall, which stores the mapping between the entries of Ke
+   // and val vector of CSR.
+
+   // TODO: Why do we calculate KeKmapSmall in each iteration again and again? Isn't it costly?
+   //       Is it feasible to calculate it for each element only once and store?
+
+   int *eLtoG, loc, colCounter, k;
+    
+   eLtoG = new int[NENv];           // elemental LtoG data
+   for(k=0; k<NENv; k++) {
+      eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
+   } 
+
+   KeKMapSmall = new int*[NENv];
+   for(j=0; j<NENv; j++) {
+      KeKMapSmall[j] = new int[NENv];
+   }
+
+   for(i=0; i<NENv; i++) {
+      for(j=0; j<NENv; j++) {
+         colCounter=0;
+         for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
+            if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
+               KeKMapSmall[i][j] = colCounter; 
+               break;
+            }
+            colCounter++;
+         }
+      }
+   }
+   
+   // Creating val vector
+   for(i=0; i<NENv; i++) {
+      for(j=0; j<NENv; j++) {
+         val[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_11[i][j] ;
+         K_12[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_12[i][j] ;
+         K_13[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_13[i][j] ;
+         val_f[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_14[i][j] ;      
       }
    }
 
@@ -1344,11 +1425,9 @@ void applyBC()
    // For EBCs reduction is not applied. Instead K and F are modified as
    // explained in class, which requires modification of both [K] and {F}.
    // SV values specified for NBCs are added to {F}.
-   
 
-   int i, j, whichBC, node ;
+   int i, j, whichBC, node;
    double x, y, z; 
-   
    int loc, colCounter;
    
    // Modify CSR vectors for velocity and wall BCs
@@ -1435,10 +1514,47 @@ void applyBC_p()
 
 
 //------------------------------------------------------------------------------
+void applyBC_deltaP()
+//------------------------------------------------------------------------------
+{
+   int i, j, whichBC, node ;
+   double x, y, z;
+   int loc, colCounter;
+
+   // Modify CSR vectors for pressure BCs
+   for (i = 0; i<nPressureNodes; i++) {
+      node = pressureNodes[i][0];         // Node at which this EBC is specified
+   	
+      x = coord[node][0];                 // May be necessary for BCstring evaluation
+      y = coord[node][1];
+      z = coord[node][2];
+
+      colCounter = 0;
+      for(loc=row_deltaP[node]; loc<row_deltaP[node+1]; loc++) {   // loc is the location of the col vector(col[x], loc=x)
+         if(col_deltaP[loc] == node) {                                   // Selection process of the KeKMapSmall data from the col vector.
+            break;
+         }
+         colCounter++;
+      }
+      
+      whichBC = pressureNodes[i][1]-1;      // Number of the specified BC   	
+      
+      for (j=row_deltaP[node]; j<row_deltaP[node+1]; j++) {
+         val_deltaP[j] = 0.0;
+      }
+      val_deltaP[ row_deltaP[node] + colCounter ] = 1;
+      
+      F_deltaP[node] = 0.0;    // Specified value of the PV          
+   } 
+
+} // End of function ApplyBC()
+
+
+
+//------------------------------------------------------------------------------
 void vectorProduct()
 //------------------------------------------------------------------------------
 {
-   
    cusparseHandle_t handle = 0;
    cusparseStatus_t status;
    status = cusparseCreate(&handle);
@@ -1465,7 +1581,57 @@ void vectorProduct()
    
    switch (vectorOperationNo) {
    
-   case 1:   
+   case 1:
+      // Calculate part of a RHS of the momentum equations ([4e], [4f])
+      // f_x = - K_uv*v - K_uw*w   
+      // f_y = - K_vu*u - K_vw*w
+      // f_z = - K_wu*u - K_wv*v
+      cudaMalloc((void**)&d_rTemp, NN*sizeof(real));  
+
+      cudaMemcpy(d_val, K_12, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);    
+      switch (phase) {
+         case 0:
+            cudaMemcpy(d_x, v, NN*sizeof(real), cudaMemcpyHostToDevice); 
+            break;
+         case 1:
+            cudaMemcpy(d_x, u, NN*sizeof(real), cudaMemcpyHostToDevice);
+            break;
+         case 2:
+            cudaMemcpy(d_x, u, NN*sizeof(real), cudaMemcpyHostToDevice);
+            break;
+      }
+      
+      #ifdef SINGLE
+         cusparseScsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_rTemp);
+      #else
+         cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_rTemp);
+      #endif
+      
+      cudaMemcpy(d_val, K_13, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);
+      switch (phase) {
+         case 0:
+            cudaMemcpy(d_x, w, NN*sizeof(real), cudaMemcpyHostToDevice); 
+            break;
+         case 1:
+            cudaMemcpy(d_x, w, NN*sizeof(real), cudaMemcpyHostToDevice);
+            break;
+         case 2:
+            cudaMemcpy(d_x, v, NN*sizeof(real), cudaMemcpyHostToDevice);
+            break;
+      }
+      
+      #ifdef SINGLE
+         cusparseScsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
+      #else
+         cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
+      #endif      
+      
+      #ifdef SINGLE
+         cublasSaxpy(NN,1.0,d_r,1,d_rTemp,1);
+      #else
+         cublasDaxpy(NN,1.0,d_r,1,d_rTemp,1);
+      #endif   
+      
       // Calculate part of a RHS of the momentum equations ([4e], [4f])
       // C_x * p^(i+1), C_y * p^(i+1), C_z * p^(i+1)
       cudaMemcpy(d_val, val_f, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);    
@@ -1476,8 +1642,15 @@ void vectorProduct()
       #else
          cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
       #endif
+      
+      #ifdef SINGLE
+         cublasSaxpy(NN,-1.0,d_rTemp,1,d_r,1);
+      #else
+         cublasDaxpy(NN,-1.0,d_rTemp,1,d_r,1);
+      #endif  
 
       cudaMemcpy(F,d_r,(NN)*sizeof(real),cudaMemcpyDeviceToHost);   
+      cudaFree(d_rTemp);      
       break;
       
    case 2: 
@@ -1511,7 +1684,6 @@ void vectorProduct()
    cudaFree(d_val);
    cudaFree(d_x);
    cudaFree(d_r);
-
 }
 
 
@@ -1521,27 +1693,29 @@ void vectorProduct()
 void solve()
 //------------------------------------------------------------------------------
 {
-   bool err;
-   int i;
-   double change, maxChange;
+   int i, j;
+   real temp;
+   real change, maxChange;
    double Start2, End2, Start3, End3, Start4, End4, Start5, End5;  
    
    cout << endl << "SOLVING CYCLE STARTS...";
    cout << endl << "============================================" << endl;   
    
-   for (iter=1; iter < nonlinearIterMax; iter++) {
+   for (iter = 1; iter < nonlinearIterMax; iter++) {
       Start5 = getHighResolutionTime();   
       cout << endl << "ITERATION NO = " << iter << endl;
       // (1) solve SCPE for pressure correction delta(p) (equations: [4a])
       Start2 = getHighResolutionTime();      
-      Start3 = getHighResolutionTime();           
+      Start3 = getHighResolutionTime();     
+      
       applyBC_p();
-      applyBC();       
+      applyBC();  
+      
       End3 = getHighResolutionTime();
       printf("   Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);          
       Start3 = getHighResolutionTime();   
       for (phase=0; phase<3; phase++) {
-         calcGlobalSys();
+         calcGlobalSys_p();
          switch (phase) {
             case 0:
                for(i=0; i<rowStartsDiagonal[NN]; i++) {
@@ -1575,6 +1749,7 @@ void solve()
          vDiagonal[i] = 1.0/vDiagonal[i];
          wDiagonal[i] = 1.0/wDiagonal[i];
       }
+      
       End3 = getHighResolutionTime();
       printf("   Time for calcGlobalSys for all      = %-.4g seconds.\n", End3 - Start3);   
       
@@ -1627,9 +1802,10 @@ void solve()
                break;
          }
          applyBC();
-      }  
+      }
+      
       for (i=0; i<NN; i++) {
-         p[i] = p[i] + (1-alpha[3]) * pPrime[i];
+         p[i] = p[i] + (1.0-alpha[3]) * pPrime[i];
       }
       
       End2 = getHighResolutionTime();
@@ -1649,7 +1825,7 @@ void solve()
       for (phase=0; phase<3; phase++) {
          Start4 = getHighResolutionTime(); 
          Start3 = getHighResolutionTime();  
-         calcGlobalSys();  
+         calcGlobalSys_mom();
          
          switch (phase) {
             case 0:
@@ -1673,11 +1849,10 @@ void solve()
                End3 = getHighResolutionTime();                  
                printf("      Time for calcGlobalSys for z        = %-.4g seconds.\n", End3 - Start3); 
                break;
-         } 
+         }
          
-         
-         Start3 = getHighResolutionTime();   
-         applyBC_p();
+         Start3 = getHighResolutionTime();
+         applyBC_p();         
          applyBC();
          End3 = getHighResolutionTime();
          printf("      Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);   
@@ -1688,36 +1863,35 @@ void solve()
          End3 = getHighResolutionTime();
          switch (phase) {
             case 0:                 
-               printf("      Time for C_x * p (@GPU)             = %-.4g seconds.\n", End3 - Start3); 
+               printf("      Time for f_u + C_x * p (@GPU)       = %-.4g seconds.\n", End3 - Start3); 
                break;
             case 1:                 
-               printf("      Time for C_y * p (@GPU)             = %-.4g seconds.\n", End3 - Start3);     
+               printf("      Time for f_v + C_y * p (@GPU)       = %-.4g seconds.\n", End3 - Start3);     
                break;
             case 2:                
-               printf("      Time for C_z * p (@GPU)             = %-.4g seconds.\n", End3 - Start3);     
+               printf("      Time for f_w + C_z * p (@GPU)       = %-.4g seconds.\n", End3 - Start3);     
                break;
          }
-
          
          Start3 = getHighResolutionTime();           
          switch (phase) {
             case 0:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[0]/(1-alpha[0]))*tempDiagonal[i]*u[i] + F[i];
+                  F[i]= (alpha[0]/(1.0-alpha[0]))*tempDiagonal[i]*u[i] + F[i];
                }
                End3 = getHighResolutionTime();
                printf("      Time for K_u(dia) * u + [C_x*p]     = %-.4g seconds.\n", End3 - Start3);                  
                break;
             case 1:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[1]/(1-alpha[1]))*tempDiagonal[i]*v[i] + F[i];
+                  F[i]= (alpha[1]/(1.0-alpha[1]))*tempDiagonal[i]*v[i] + F[i];
                }  
                End3 = getHighResolutionTime();
                printf("      Time for K_v(dia) * v + [C_y*p]     = %-.4g seconds.\n", End3 - Start3);   
                break;
             case 2:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[2]/(1-alpha[2]))*tempDiagonal[i]*w[i] + F[i]; 
+                  F[i]= (alpha[2]/(1.0-alpha[2]))*tempDiagonal[i]*w[i] + F[i]; 
                }   
                End3 = getHighResolutionTime();
                printf("      Time for K_w(dia) * w + [C_z*p]     = %-.4g seconds.\n", End3 - Start3);  
@@ -1782,19 +1956,10 @@ void solve()
       //-----------------------------------------
       
       Start2 = getHighResolutionTime();   
-      maxChange= pPrime[0];
-
-      if (maxChange < 0) {
-         maxChange = maxChange * -1;
-      }
+      maxChange = abs(pPrime[0]);
       
       for (i=1; i<NN; i++) {
-         change = pPrime[i];
-         
-         if (change < 0) {
-            change = change * -1;
-         }
-
+         change = abs(pPrime[i]);
          if (change > maxChange) {
             maxChange = change;
          }
@@ -1846,11 +2011,7 @@ void solve()
    else {
       cout << endl << "Convergence is achieved at " << iter << " iterations." << endl; 
       writeTecplotFile();      
-   }   
-   
-   
-   // Deleting the unnecessary arrays for future
-   delete[] F;
+   }
 
 }  // End of function solve()
 
@@ -1906,15 +2067,7 @@ void readRestartFile()
    }
 
    restartFile.close();
-
-   // Set uOld to the values read from the restart file.
-   for (int i = 0; i<NN; i++) {
-      uOld[i] = u[i];
-      vOld[i] = v[i];
-      wOld[i] = w[i];
-      pOld[i] = p[i];      
-   }
-
+   
 } // End of function readRestartFile()
 
 
