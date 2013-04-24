@@ -1,6 +1,11 @@
 #include <cusp/csr_matrix.h>
 #include <cusp/print.h>
+#include <cusp/precond/diagonal.h>
+#include <cusp/relaxation/jacobi.h>
+#include <cusp/relaxation/polynomial.h>
+#include <cusp/precond/aggregation/smoothed_aggregation.h>
 #include <cusp/krylov/cg.h>
+#include <cusp/krylov/cr.h>
 #include <cusp/krylov/bicg.h>
 #include <cusp/krylov/bicgstab.h>
 #include <cusp/krylov/gmres.h>
@@ -25,17 +30,23 @@ using namespace std;
 
 extern int *rowStartsSmall, *colSmall, NN, NNZ, solverIterMax;
 extern double solverTol;
-extern real2 *uDiagonal, *vDiagonal, *wDiagonal, *u, *v, *w;
+extern real2 *K_u_diagonal, *K_v_diagonal, *K_w_diagonal, *u, *v, *w;
 extern real2 *Cx, *Cy, *Cz;
-extern real2 *F, *pPrime;
+extern real2 *CxT, *CyT, *CzT;
+extern real2 *delta_p;
 extern int *rowStartsDiagonal, *colDiagonal;
+extern real2 *F_deltaP, *val_deltaP;
+extern int *row_deltaP, *col_deltaP;
+extern int iter;
 
+void applyBC_deltaP();
 double getHighResolutionTime();
 
 //-----------------------------------------------------------------------------
 void CUSP_pC_CUSP_CG()
 //-----------------------------------------------------------------------------
 {
+
    double Start6, End6, Start7, End7;
    
    Start6 = getHighResolutionTime();         
@@ -47,28 +58,31 @@ void CUSP_pC_CUSP_CG()
    //---------------------------------------------- 
    // Copy C_x from host to device
    // Allocate stifness matrix C_x in CSR format
-   cusp::csr_matrix<int, real2, cusp::device_memory> CCx(NN, NN, NNZ);
-   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,CCx.row_offsets.begin());
-   thrust::copy(colSmall,colSmall +  NNZ,CCx.column_indices.begin());
-   thrust::copy(Cx,Cx + NNZ,CCx.values.begin());
+   cusp::csr_matrix<int, real2, cusp::device_memory> Cx_CUSP(NN, NN, NNZ);
+   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,Cx_CUSP.row_offsets.begin());
+   thrust::copy(colSmall,colSmall +  NNZ,Cx_CUSP.column_indices.begin());
+   thrust::copy(Cx,Cx + NNZ,Cx_CUSP.values.begin());
    //---------------------------------------------- 
    
    //---------------------------------------------- 
-   // transpose(C_x)
-   cusp::csr_matrix<int, real2, cusp::device_memory> CxT;
-   cusp::transpose(CCx, CxT);
+   // Copy transpose(C_x) from host to device
+   // Allocate stifness matrix transpose(C_x) in CSR format
+   cusp::csr_matrix<int, real2, cusp::device_memory> CxT_CUSP(NN, NN, NNZ);
+   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,CxT_CUSP.row_offsets.begin());
+   thrust::copy(colSmall,colSmall +  NNZ,CxT_CUSP.column_indices.begin());
+   thrust::copy(CxT,CxT + NNZ,CxT_CUSP.values.begin());
    //---------------------------------------------- 
    End7 = getHighResolutionTime();    
-   printf("         Time for transpose(C_x)             = %-.4g seconds.\n", End7 - Start7);       
+   printf("         Time for copy Cx and CxT            = %-.4g seconds.\n", End7 - Start7);       
 
    Start7 = getHighResolutionTime();     
    //---------------------------------------------- 
    // Copy K_u^(-1) from host to device 
    // Allocate stifness matrix K_u^(-1) in CSR format   
-   cusp::csr_matrix<int, real2, cusp::device_memory> uDiagonal_CUSP(NN, NN, NN);
-   thrust::copy(rowStartsDiagonal,rowStartsDiagonal + NN + 1,uDiagonal_CUSP.row_offsets.begin());
-   thrust::copy(colDiagonal,colDiagonal +  NN,uDiagonal_CUSP.column_indices.begin());
-   thrust::copy(uDiagonal,uDiagonal + NN,uDiagonal_CUSP.values.begin()); 
+   cusp::csr_matrix<int, real2, cusp::device_memory> K_u_diagonal_CUSP(NN, NN, NN);
+   thrust::copy(rowStartsDiagonal,rowStartsDiagonal + NN + 1,K_u_diagonal_CUSP.row_offsets.begin());
+   thrust::copy(colDiagonal,colDiagonal +  NN,K_u_diagonal_CUSP.column_indices.begin());
+   thrust::copy(K_u_diagonal,K_u_diagonal + NN,K_u_diagonal_CUSP.values.begin()); 
    //----------------------------------------------     
 
    //---------------------------------------------- 
@@ -83,7 +97,7 @@ void CUSP_pC_CUSP_CG()
    // \______________/ 
    //        F1             
    cusp::array1d<real2, cusp::device_memory> F1(NN);
-   cusp::multiply(CxT, u_CUSP, F1);   
+   cusp::multiply(CxT_CUSP, u_CUSP, F1);   
    cusp::array1d<real2, cusp::device_memory> Fsum(NN);
    cusp::blas::fill(Fsum,0.0);   
    cusp::blas::axpy(F1,Fsum,-1); 
@@ -107,18 +121,18 @@ void CUSP_pC_CUSP_CG()
    // LHS of the equation [4a]
    // transpose(C_x)*(diagonal(K_u)^-1
    cusp::csr_matrix<int, real2, cusp::device_memory> CxTdia;
-   cusp::multiply(CxT, uDiagonal_CUSP, CxTdia);
+   cusp::multiply(CxT_CUSP, K_u_diagonal_CUSP, CxTdia);
    //----------------------------------------------    
    
    {
       // create temporary empty matrix to delete array
       cusp::csr_matrix<int,real2,cusp::device_memory> tmp(1,1,1);
-      CxT.swap(tmp);
+      CxT_CUSP.swap(tmp);
    } 
    {
       // create temporary empty matrix
       cusp::csr_matrix<int,real2,cusp::device_memory> tmp(1,1,1);
-      uDiagonal_CUSP.swap(tmp);
+      K_u_diagonal_CUSP.swap(tmp);
    }   
    End7 = getHighResolutionTime();   
    printf("         Time for [transpose(C_x)] * K_u     = %-.4g seconds.\n", End7 - Start7);  
@@ -130,7 +144,8 @@ void CUSP_pC_CUSP_CG()
    // \________________________________/
    //          from above (CxTdia)   
    cusp::csr_matrix<int, real2, cusp::device_memory> valx;   
-   cusp::multiply(CxTdia, CCx, valx);   
+   cusp::multiply(CxTdia, Cx_CUSP, valx);   
+   // cout << "NNZ K pressure correction = " << valx.row_offsets[NN] << endl;
    //----------------------------------------------    
    End7 = getHighResolutionTime();   
    printf("         Time for [trans(C_x)*K_u] * C_x     = %-.4g seconds.\n", End7 - Start7);     
@@ -147,28 +162,31 @@ void CUSP_pC_CUSP_CG()
    //---------------------------------------------- 
    // Copy C_y from host to device
    // Allocate stifness matrix C_y in CSR format
-   cusp::csr_matrix<int, real2, cusp::device_memory> CCy(NN, NN, NNZ);
-   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,CCy.row_offsets.begin());
-   thrust::copy(colSmall,colSmall +  NNZ,CCy.column_indices.begin());
-   thrust::copy(Cy,Cy + NNZ,CCy.values.begin());
+   cusp::csr_matrix<int, real2, cusp::device_memory> Cy_CUSP(NN, NN, NNZ);
+   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,Cy_CUSP.row_offsets.begin());
+   thrust::copy(colSmall,colSmall +  NNZ,Cy_CUSP.column_indices.begin());
+   thrust::copy(Cy,Cy + NNZ,Cy_CUSP.values.begin());
    //---------------------------------------------- 
    
    //---------------------------------------------- 
-   // transpose(C_y)
-   cusp::csr_matrix<int, real2, cusp::device_memory> CyT;
-   cusp::transpose(CCy, CyT);
-   //----------------------------------------------   
+   // Copy transpose(C_y) from host to device
+   // Allocate stifness matrix transpose(C_y) in CSR format
+   cusp::csr_matrix<int, real2, cusp::device_memory> CyT_CUSP(NN, NN, NNZ);
+   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,CyT_CUSP.row_offsets.begin());
+   thrust::copy(colSmall,colSmall +  NNZ,CyT_CUSP.column_indices.begin());
+   thrust::copy(CyT,CyT + NNZ,CyT_CUSP.values.begin());
+   //---------------------------------------------- 
    End7 = getHighResolutionTime();    
-   printf("         Time for transpose(C_y)             = %-.4g seconds.\n", End7 - Start7);   
+   printf("         Time for copy Cy and CyT            = %-.4g seconds.\n", End7 - Start7);    
       
    Start7 = getHighResolutionTime();         
    //---------------------------------------------- 
    // Copy K_v^(-1) from host to device 
    // Allocate stifness matrix K_v^(-1) in CSR format   
-   cusp::csr_matrix<int, real2, cusp::device_memory> vDiagonal_CUSP(NN, NN, NN);
-   thrust::copy(rowStartsDiagonal,rowStartsDiagonal + NN + 1,vDiagonal_CUSP.row_offsets.begin());
-   thrust::copy(colDiagonal,colDiagonal +  NN,vDiagonal_CUSP.column_indices.begin());
-   thrust::copy(vDiagonal,vDiagonal + NN,vDiagonal_CUSP.values.begin()); 
+   cusp::csr_matrix<int, real2, cusp::device_memory> K_v_diagonal_CUSP(NN, NN, NN);
+   thrust::copy(rowStartsDiagonal,rowStartsDiagonal + NN + 1,K_v_diagonal_CUSP.row_offsets.begin());
+   thrust::copy(colDiagonal,colDiagonal +  NN,K_v_diagonal_CUSP.column_indices.begin());
+   thrust::copy(K_v_diagonal,K_v_diagonal + NN,K_v_diagonal_CUSP.values.begin()); 
    //----------------------------------------------     
 
    //---------------------------------------------- 
@@ -183,7 +201,7 @@ void CUSP_pC_CUSP_CG()
    // \______________/ 
    //        F2             
    cusp::array1d<real2, cusp::device_memory> F2(NN);
-   cusp::multiply(CyT, v_CUSP, F2);     
+   cusp::multiply(CyT_CUSP, v_CUSP, F2);     
    cusp::blas::axpy(F2,Fsum,-1); 
    //---------------------------------------------- 
    
@@ -205,18 +223,18 @@ void CUSP_pC_CUSP_CG()
    // LHS of the equation [4a]
    // transpose(C_y)*(diagonal(K_v)^-1
    cusp::csr_matrix<int, real2, cusp::device_memory> CyTdia;
-   cusp::multiply(CyT, vDiagonal_CUSP, CyTdia);
+   cusp::multiply(CyT_CUSP, K_v_diagonal_CUSP, CyTdia);
    //----------------------------------------------    
    
    {
       // create temporary empty matrix to delete array
       cusp::csr_matrix<int,real2,cusp::device_memory> tmp(1,1,1);
-      CyT.swap(tmp);
+      CyT_CUSP.swap(tmp);
    } 
    {
       // create temporary empty matrix
       cusp::csr_matrix<int,real2,cusp::device_memory> tmp(1,1,1);
-      vDiagonal_CUSP.swap(tmp);
+      K_v_diagonal_CUSP.swap(tmp);
    }
    End7 = getHighResolutionTime();   
    printf("         Time for [transpose(C_y)] * K_v     = %-.4g seconds.\n", End7 - Start7);   
@@ -228,7 +246,7 @@ void CUSP_pC_CUSP_CG()
    // \________________________________/
    //          from above (CyTdia)   
    cusp::csr_matrix<int, real2, cusp::device_memory> valy;   
-   cusp::multiply(CyTdia, CCy, valy);   
+   cusp::multiply(CyTdia, Cy_CUSP, valy);   
    // summing x, y components
    // [transpose(C_x)*(diagonal(K_u)^-1]*C_x + [transpose(C_y)*(diagonal(K_v)^-1]*C_y
    cusp::blas::axpy(valy.values,valx.values,1);
@@ -254,28 +272,31 @@ void CUSP_pC_CUSP_CG()
    //---------------------------------------------- 
    // Copy C_z from host to device
    // Allocate stifness matrix C_y in CSR format
-   cusp::csr_matrix<int, real2, cusp::device_memory> CCz(NN, NN, NNZ);
-   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,CCz.row_offsets.begin());
-   thrust::copy(colSmall,colSmall +  NNZ,CCz.column_indices.begin());
-   thrust::copy(Cz,Cz + NNZ,CCz.values.begin());
+   cusp::csr_matrix<int, real2, cusp::device_memory> Cz_CUSP(NN, NN, NNZ);
+   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,Cz_CUSP.row_offsets.begin());
+   thrust::copy(colSmall,colSmall +  NNZ,Cz_CUSP.column_indices.begin());
+   thrust::copy(Cz,Cz + NNZ,Cz_CUSP.values.begin());
    //---------------------------------------------- 
    
    //---------------------------------------------- 
-   // transpose(C_z)
-   cusp::csr_matrix<int, real2, cusp::device_memory> CzT;
-   cusp::transpose(CCz, CzT);
-   //----------------------------------------------
+   // Copy transpose(C_z) from host to device
+   // Allocate stifness matrix transpose(C_z) in CSR format
+   cusp::csr_matrix<int, real2, cusp::device_memory> CzT_CUSP(NN, NN, NNZ);
+   thrust::copy(rowStartsSmall,rowStartsSmall + NN + 1,CzT_CUSP.row_offsets.begin());
+   thrust::copy(colSmall,colSmall +  NNZ,CzT_CUSP.column_indices.begin());
+   thrust::copy(CzT,CzT + NNZ,CzT_CUSP.values.begin());
+   //---------------------------------------------- 
    End7 = getHighResolutionTime();    
-   printf("         Time for transpose(C_z)             = %-.4g seconds.\n", End7 - Start7);   
+   printf("         Time for copy Cz and CzT            = %-.4g seconds.\n", End7 - Start7);    
       
    Start7 = getHighResolutionTime();      
    //---------------------------------------------- 
    // Copy K_w^(-1) from host to device 
    // Allocate stifness matrix K_w^(-1) in CSR format   
-   cusp::csr_matrix<int, real2, cusp::device_memory> wDiagonal_CUSP(NN, NN, NN);
-   thrust::copy(rowStartsDiagonal,rowStartsDiagonal + NN + 1,wDiagonal_CUSP.row_offsets.begin());
-   thrust::copy(colDiagonal,colDiagonal +  NN,wDiagonal_CUSP.column_indices.begin());
-   thrust::copy(wDiagonal,wDiagonal + NN,wDiagonal_CUSP.values.begin()); 
+   cusp::csr_matrix<int, real2, cusp::device_memory> K_w_diagonal_CUSP(NN, NN, NN);
+   thrust::copy(rowStartsDiagonal,rowStartsDiagonal + NN + 1,K_w_diagonal_CUSP.row_offsets.begin());
+   thrust::copy(colDiagonal,colDiagonal +  NN,K_w_diagonal_CUSP.column_indices.begin());
+   thrust::copy(K_w_diagonal,K_w_diagonal + NN,K_w_diagonal_CUSP.values.begin()); 
    //----------------------------------------------     
 
    //---------------------------------------------- 
@@ -290,7 +311,7 @@ void CUSP_pC_CUSP_CG()
    // \______________/ 
    //        F2             
    cusp::array1d<real2, cusp::device_memory> F3(NN);
-   cusp::multiply(CzT, w_CUSP, F3);     
+   cusp::multiply(CzT_CUSP, w_CUSP, F3);     
    cusp::blas::axpy(F3,Fsum,-1); 
    //---------------------------------------------- 
    
@@ -312,18 +333,18 @@ void CUSP_pC_CUSP_CG()
    // LHS of the equation [4a]
    // transpose(C_z)*(diagonal(K_w)^-1
    cusp::csr_matrix<int, real2, cusp::device_memory> CzTdia;
-   cusp::multiply(CzT, wDiagonal_CUSP, CzTdia);
+   cusp::multiply(CzT_CUSP, K_w_diagonal_CUSP, CzTdia);
    //----------------------------------------------    
    
    {
       // create temporary empty matrix to delete array
       cusp::csr_matrix<int,real2,cusp::device_memory> tmp(1,1,1);
-      CzT.swap(tmp);
+      CzT_CUSP.swap(tmp);
    } 
    {
       // create temporary empty matrix to delete array
       cusp::csr_matrix<int,real2,cusp::device_memory> tmp(1,1,1);
-      wDiagonal_CUSP.swap(tmp);
+      K_w_diagonal_CUSP.swap(tmp);
    }   
    End7 = getHighResolutionTime();   
    printf("         Time for [transpose(C_z)] * K_w     = %-.4g seconds.\n", End7 - Start7);   
@@ -335,7 +356,7 @@ void CUSP_pC_CUSP_CG()
    // \________________________________/
    //          from above (CzTdia)   
    cusp::csr_matrix<int, real2, cusp::device_memory> valz;   
-   cusp::multiply(CzTdia, CCz, valz);   
+   cusp::multiply(CzTdia, Cz_CUSP, valz);   
    // summing x, y, z components
    // [transpose(C_x)*(diagonal(K_u)^-1]*C_x + [transpose(C_y)*(diagonal(K_v)^-1]*C_y + [transpose(C_z)*(diagonal(K_w)^-1]*C_z
    cusp::blas::axpy(valz.values,valx.values,1);
@@ -349,51 +370,93 @@ void CUSP_pC_CUSP_CG()
    End7 = getHighResolutionTime();   
    printf("         Time for [trans(C_z)*K_w] * C_z     = %-.4g seconds.\n", End7 - Start7);   
    End6 = getHighResolutionTime();   
-   printf("      Time for calc pC arrays for z dim   = %-.4g seconds.\n", End6 - Start6);          
+   printf("      Time for calc pC arrays for z dim   = %-.4g seconds.\n", End6 - Start6); 
    
-   //----------------------------------------------
-   //-------------CONJUGATE GRADIENT---------------
-
-   Start6 = getHighResolutionTime();     
-   //----------------------------------------------
-   // Solve pressure correction equation [4a] with CUSP's CG
-
-   cusp::array1d<real2, cusp::device_memory> x(NN);
-
-   // Copy previous solution to device memory
-   thrust::copy(pPrime, pPrime + NN, x.begin());
    
-   // Set stopping criteria:
-   //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
-   cusp::default_monitor<real2> monitor(Fsum, solverIterMax, solverTol);
+   Start6 = getHighResolutionTime();       
+   // Copy resulting LHS and RHS vectors from device memory to host memory
 
-   // Set preconditioner (identity)
-   cusp::identity_operator<real2, cusp::device_memory> M(valx.num_rows, valx.num_rows);
+   if (iter==1){   
+      val_deltaP = new real2[valx.row_offsets[NN]];
+      F_deltaP = new real2[NN];
+      row_deltaP = new int[NN+1];
+      col_deltaP = new int[valx.row_offsets[NN]];      
+   }
 
-   // Solve the linear system A * x = Fsum with the Conjugate Gradient method
-   // cusp::krylov::bicgstab(A, x, Fsum, monitor, M);
-   //int restart = 40;
-   // cout << "Iterative solution is started." << endl;
-   cusp::krylov::cg(valx, x, Fsum, monitor, M);
-   // cout << "Iterative solution is finished." << endl;
+   thrust::copy(valx.row_offsets.begin(), valx.row_offsets.end(), row_deltaP);
+   thrust::copy(valx.column_indices.begin(), valx.column_indices.end(), col_deltaP);
+   thrust::copy(valx.values.begin(), valx.values.end(), val_deltaP);
+   
+   thrust::copy(Fsum.begin(), Fsum.end(), F_deltaP);  
+   {
+      // create temporary empty matrix to delete array
+      cusp::array1d<real2, cusp::device_memory> tmp(1);
+      Fsum.swap(tmp);
+   }
+   applyBC_deltaP();
 
-   // Copy x from device back to u on host 
-   thrust::copy(x.begin(), x.end(), pPrime);
+   thrust::copy(val_deltaP,val_deltaP + NNZ,valx.values.begin());   
+   
+   cusp::array1d<real2, cusp::device_memory> F(NN);
+   thrust::copy(F_deltaP,F_deltaP + NN,F.begin());
    
    End6 = getHighResolutionTime();   
-   printf("      Time for CG calculations            = %-.4g seconds.\n", End6 - Start6);     
+   printf("      Time for init variables for CG      = %-.4g seconds.\n", End6 - Start6);
    
-   // report solver results
-   if (monitor.converged())
-   {
-       std::cout << "      Solver converged to " << monitor.relative_tolerance() << " relative tolerance";
-       std::cout << " after " << monitor.iteration_count() << " iterations" << endl;
-   }
-   else
-   {
-       std::cout << "      Solver reached iteration limit " << monitor.iteration_limit() << " before converging";
-       std::cout << " to " << monitor.relative_tolerance() << " relative tolerance " << endl;
-   }
+   if (iter!=1) {
+      //----------------------------------------------
+      //-------------CONJUGATE GRADIENT---------------
 
+      Start6 = getHighResolutionTime();     
+      //----------------------------------------------
+      // Solve pressure correction equation [4a] with CUSP's CG
+
+      cusp::array1d<real2, cusp::device_memory> x(NN);
+
+      // Copy previous solution to device memory
+      thrust::copy(delta_p, delta_p + NN, x.begin());
+      
+      // Set stopping criteria:
+      //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
+      cusp::default_monitor<real2> monitor(F, solverIterMax, solverTol);   
+
+      // Set preconditioner 
+      // 1) identity
+      //cusp::identity_operator<real2, cusp::device_memory> M(valx.num_rows, valx.num_rows);    
+      // 2) smoothed aggregation preconditioner and jacobi smoother
+      //cusp::precond::aggregation::smoothed_aggregation<int, real2, cusp::device_memory> M(valx);    
+      // 3) smoothed aggregation preconditioner and polynomial smoother
+	   //typedef cusp::relaxation::polynomial<int,cusp::device_memory> Smoother;      
+      //cusp::precond::aggregation::smoothed_aggregation<int, real2, cusp::device_memory, Smoother> M(valx);    
+      // 4) diagonal preconditioner
+      cusp::precond::diagonal<real2, cusp::device_memory> M(valx);
+
+      // Solve the linear system A * x = Fsum with the Conjugate Gradient method
+      // cusp::krylov::bicgstab(A, x, Fsum, monitor, M);
+      //int restart = 40;
+      // cout << "Iterative solution is started." << endl;
+      cusp::krylov::cg(valx, x, F, monitor, M);
+      // cout << "Iterative solution is finished." << endl;
+
+      // Copy x from device back to u on host 
+      thrust::copy(x.begin(), x.end(), delta_p);
+      
+      End6 = getHighResolutionTime();   
+      printf("      Time for CG calculations            = %-.4g seconds.\n", End6 - Start6);     
+      
+      // report solver results
+      if (monitor.converged())
+      {
+         std::cout << "      Solver converged to " << monitor.relative_tolerance() << " relative tolerance";
+         std::cout << " after " << monitor.iteration_count() << " iterations";
+         std::cout << " (" << monitor.residual_norm() << " final residual)" << endl;           
+      }
+      else
+      {
+         std::cout << "      Solver reached iteration limit " << monitor.iteration_limit() << " before converging";
+         std::cout << " to " << monitor.relative_tolerance() << " relative tolerance " ;
+         std::cout << " (" << monitor.residual_norm() << " final residual)" << endl;          
+      }
+   }
 
 }  // End of function CUSP_pressureCorrection()

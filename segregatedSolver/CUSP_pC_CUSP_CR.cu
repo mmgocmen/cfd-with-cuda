@@ -1,6 +1,11 @@
 #include <cusp/csr_matrix.h>
 #include <cusp/print.h>
+#include <cusp/precond/diagonal.h>
+#include <cusp/relaxation/jacobi.h>
+#include <cusp/relaxation/polynomial.h>
+#include <cusp/precond/aggregation/smoothed_aggregation.h>
 #include <cusp/krylov/cg.h>
+#include <cusp/krylov/cr.h>
 #include <cusp/krylov/bicg.h>
 #include <cusp/krylov/bicgstab.h>
 #include <cusp/krylov/gmres.h>
@@ -38,7 +43,7 @@ void applyBC_deltaP();
 double getHighResolutionTime();
 
 //-----------------------------------------------------------------------------
-void CUSP_pC_CUDA_CR()
+void CUSP_pC_CUSP_CR()
 //-----------------------------------------------------------------------------
 {
 
@@ -381,11 +386,6 @@ void CUSP_pC_CUDA_CR()
    thrust::copy(valx.row_offsets.begin(), valx.row_offsets.end(), row_deltaP);
    thrust::copy(valx.column_indices.begin(), valx.column_indices.end(), col_deltaP);
    thrust::copy(valx.values.begin(), valx.values.end(), val_deltaP);
-   {
-      // create temporary empty matrix to delete array
-      cusp::csr_matrix<int,real2,cusp::device_memory> tmp(1,1,1);
-      valx.swap(tmp);
-   }  
    
    thrust::copy(Fsum.begin(), Fsum.end(), F_deltaP);  
    {
@@ -393,142 +393,70 @@ void CUSP_pC_CUDA_CR()
       cusp::array1d<real2, cusp::device_memory> tmp(1);
       Fsum.swap(tmp);
    }
-   applyBC_deltaP();    
-   
-   //----------------------------------------------
-   //-------------CONJUGATE GRADIENT---------------
-   
-   real2 a, b, r0, r1;
-   int k;
-   int *d_col, *d_row;
-   real2 *d_val, *d_x, *d_r, *d_p, *d_Ax;  
-   
-   cusparseHandle_t handle = 0;
-   cusparseStatus_t status;
-   status = cusparseCreate(&handle);
-   if (status != CUSPARSE_STATUS_SUCCESS) {
-      fprintf( stderr, "!!!! CUSPARSE initialization error\n" );
-   }
-   cusparseMatDescr_t descr = 0;
-   status = cusparseCreateMatDescr(&descr); 
-   if (status != CUSPARSE_STATUS_SUCCESS) {
-      fprintf( stderr, "!!!! CUSPARSE cusparseCreateMatDescr error\n" );
-   } 
+   applyBC_deltaP();
 
-   cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
-   cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
+   thrust::copy(val_deltaP,val_deltaP + NNZ,valx.values.begin());   
    
-   cudaMalloc((void**)&d_col, row_deltaP[NN]*sizeof(int)) ;
-   cudaMalloc((void**)&d_row, (NN+1)*sizeof(int)) ;
-   cudaMalloc((void**)&d_val, row_deltaP[NN]*sizeof(real2)) ;
-   cudaMalloc((void**)&d_x, NN*sizeof(real2)) ;  
-   cudaMalloc((void**)&d_r, NN*sizeof(real2)) ;
-   cudaMalloc((void**)&d_p, NN*sizeof(real2)) ;
-   cudaMalloc((void**)&d_Ax, NN*sizeof(real2)) ;
-
-   cudaMemcpy(d_col, col_deltaP, row_deltaP[NN]*sizeof(int), cudaMemcpyHostToDevice);
-   cudaMemcpy(d_row, row_deltaP, (NN+1)*sizeof(int), cudaMemcpyHostToDevice);
-   cudaMemcpy(d_val, val_deltaP, row_deltaP[NN]*sizeof(real2), cudaMemcpyHostToDevice);
-   cudaMemcpy(d_x, delta_p, NN*sizeof(real2), cudaMemcpyHostToDevice);
-   cudaMemcpy(d_r, F_deltaP, NN*sizeof(real2), cudaMemcpyHostToDevice);
+   cusp::array1d<real2, cusp::device_memory> F(NN);
+   thrust::copy(F_deltaP,F_deltaP + NN,F.begin());
    
-   //delete[] col_deltaP;
-   //delete[] row_deltaP;
-   //delete[] val_deltaP;
-   //delete[] F_deltaP;   
    End6 = getHighResolutionTime();   
-   printf("      Time for init variables for CR      = %-.4g seconds.\n", End6 - Start6); 
-
-   Start6 = getHighResolutionTime();
-   cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, 1.0, descr, d_val, d_row, d_col, d_x, 0.0, d_Ax);
-   // cusparseDcsrmv(handle, cusparseOperation_t transA, m, n, alpha, descrA, *csrValA, *csrRowPtrA, *csrColIndA, *x, beta, *y )
-   // descrA = matrix property of A  
-   // y = alpha * op(A) * x + beta * y         
-   // d_Ax = b * A * d_p + 0.0 * d_Ax 
+   printf("      Time for init variables for CR      = %-.4g seconds.\n", End6 - Start6);
    
-   cublasDaxpy(NN, -1.0, d_Ax, 1, d_r, 1);
-   // cublasDaxpy(int n, *alpha, *x, incx, *y, incy)
-   // y[j] = alpha * x[k] + y[j]
-   // d_Ax = 1.0 * d_Ar + d_Ax    
-   
-   r1 = cublasDdot(NN, d_r, 1, d_r, 1);
-   // result = cublasDdot(int n, *x, incx, *y, incy)
-   // result = total(x[k] × y[j]) 
-   // r1 = total(d_r[i] * d_Ar[i])
+   if (iter!=1) {   
+      //----------------------------------------------
+      //-------------CONJUGATE GRADIENT---------------
 
-   k = 1;
-   while (r1 > solverTol*solverTol && k <= solverIterMax) {
-      if (k > 1) {
-         b = r1 / r0;
-         cublasDscal(NN, b, d_p, 1);
-         // cublasDscal(int n, *alpha, *x, incx)
-         // x[j] = alpha * x[j]
-         // d_p = b * d_p        
-         
-         cublasDaxpy(NN, 1.0, d_r, 1, d_p, 1);
-         // cublasDaxpy(int n, *alpha, *x, incx, *y, incy)
-         // y[j] = alpha * x[k] + y[j]
-         // d_p = 1.0 * d_r + d_p   
-         
-      } else {
-         cublasDcopy(NN, d_r, 1, d_p, 1);
-         // cublasDcopy(int n, *alpha, *x, incx, *y, incy)     
-         // y[j] = x[k]         
-         // d_p = d_r
-         
+      Start6 = getHighResolutionTime();     
+      //----------------------------------------------
+      // Solve pressure correction equation [4a] with CUSP's CG
+
+      cusp::array1d<real2, cusp::device_memory> x(NN);
+
+      // Copy previous solution to device memory
+      thrust::copy(delta_p, delta_p + NN, x.begin());
+      
+      // Set stopping criteria:
+      //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
+      cusp::default_monitor<real2> monitor(F, solverIterMax, solverTol);
+
+      // Set preconditioner 
+      // 1) identity
+      //cusp::identity_operator<real2, cusp::device_memory> M(valx.num_rows, valx.num_rows);    
+      // 2) smoothed aggregation preconditioner and jacobi smoother
+      //cusp::precond::aggregation::smoothed_aggregation<int, real2, cusp::device_memory> M(valx);    
+      // 3) smoothed aggregation preconditioner and polynomial smoother
+	   //typedef cusp::relaxation::polynomial<int,cusp::device_memory> Smoother;      
+      //cusp::precond::aggregation::smoothed_aggregation<int, real2, cusp::device_memory, Smoother> M(valx);    
+      // 4) diagonal preconditioner
+      cusp::precond::diagonal<real2, cusp::device_memory> M(valx);      
+      
+      // Solve the linear system A * x = Fsum with the Conjugate Gradient method
+      // cusp::krylov::bicgstab(A, x, Fsum, monitor, M);
+      //int restart = 40;
+      // cout << "Iterative solution is started." << endl;
+      cusp::krylov::cr(valx, x, F, monitor, M);
+      // cout << "Iterative solution is finished." << endl;
+
+      // Copy x from device back to u on host 
+      thrust::copy(x.begin(), x.end(), delta_p);
+      
+      End6 = getHighResolutionTime();   
+      printf("      Time for CR calculations            = %-.4g seconds.\n", End6 - Start6);     
+      
+      // report solver results
+      if (monitor.converged())
+      {
+         std::cout << "      Solver converged to " << monitor.relative_tolerance() << " relative tolerance";
+         std::cout << " after " << monitor.iteration_count() << " iterations";
+         std::cout << " (" << monitor.residual_norm() << " final residual)" << endl;   
       }
-
-      cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, 1.0, descr, d_val, d_row, d_col, d_p, 0.0, d_Ax);
-      // cusparseDcsrmv(handle, cusparseOperation_t transA, m, n, alpha, descrA, *csrValA, *csrRowPtrA, *csrColIndA, *x, beta, *y )
-      // descrA = matrix property of A  
-      // y = alpha * op(A) * x + beta * y         
-      // d_Ax = 1.0 * A * d_p + 0.0 * d_Ax    
-      
-      a = r1 / cublasDdot(NN, d_p, 1, d_Ax, 1);
-      // a = r1 / total(d_Ax[i] * d_Ax[i]) 
-      
-      cublasDaxpy(NN, a, d_p, 1, d_x, 1);
-      // cublasDaxpy(int n, *alpha, *x, incx, *y, incy)
-      // y[j] = alpha * x[k] + y[j]
-      // d_x = a * d_p + d_x  
-      
-      cublasDaxpy(NN, -a, d_Ax, 1, d_r, 1);
-      // cublasDaxpy(int n, *alpha, *x, incx, *y, incy)
-      // y[j] = alpha * x[k] + y[j]
-      // d_r = -a * d_Ax + d_r     
-      
-      r0 = r1;
-      
-      r1 = cublasDdot(NN, d_r, 1, d_r, 1);
-      // result = cublasDdot(int n, *x, incx, *y, incy)
-      // result = total(x[k] × y[j]) 
-      // r1 = total(d_r[i] * d_r[i])  
-      
-      cudaThreadSynchronize();
-      k++;
+      else
+      {
+         std::cout << "      Solver reached iteration limit " << monitor.iteration_limit() << " before converging";
+         std::cout << " to " << monitor.relative_tolerance() << " relative tolerance " ;
+         std::cout << " (" << monitor.residual_norm() << " final residual)" << endl;  
+      }
    }
 
-   cudaMemcpy(delta_p, d_x, NN*sizeof(real2), cudaMemcpyDeviceToHost);
-   End6 = getHighResolutionTime();   
-   printf("      Time for CR calculations            = %-.4g seconds.\n", End6 - Start6);         
-   
-   cusparseDestroy(handle);
-   cudaFree(d_col);
-   cudaFree(d_row);
-   cudaFree(d_val);
-   cudaFree(d_x);
-   cudaFree(d_r);
-   cudaFree(d_p);
-   cudaFree(d_Ax);   
-   
-   if (k > solverIterMax) {
-      std::cout << "      Solver reached iteration limit " << k-1 << " before converging";      
-      std::cout << " to " <<  solverTol ;
-      std::cout << ", final residual is " << sqrt(r1) << endl;
-   }
-   else {
-      std::cout << "      Solver converged to " << sqrt(r1) << " relative tolerance";
-      std::cout << " after " << k-1 << " iterations" << endl;
-   }
-
-}  // End of function CUSP_pC_CUDA_CG()
+}  // End of function CUSP_pressureCorrection()
