@@ -61,17 +61,23 @@ double **detJacob, ****gDSp, ****gDSv;
 
 int **GtoL, *rowStartsSmall, *colSmall, **KeKMapSmall, NNZ;
 int *rowStartsDiagonal, *colDiagonal, NNZ_diagonal;
-int *KtoKdiaMap;
+int ***KeKMap;
 
-double **Ke_11, **Ke_12, **Ke_13, **Ke_14;
-double **Ke_11_add, **Ke_12_add, **Ke_13_add, **Ke_14_add;
+double **Ke_1, **Ke_2, **Ke_3;
+double **Ke_1_add, **Ke_2_add, **Ke_3_add, **Ke_4_add;
 double *uNodal, *vNodal, *wNodal;
 double u0, v0, w0; 
 double *Du0, *Dv0, *Dw0;
-real *F, *u, *v, *w, *pPrime, *p, *velVector;
-real *uDiagonal, *vDiagonal, *wDiagonal, *tempDiagonal;
+real *F, *u, *v, *w, *delta_p, *p, *velVector;
+real *K_u_diagonal, *K_v_diagonal, *K_w_diagonal, *tempDiagonal;
+real *K_1, *K_2, *K_3;
+
+double **Cx_elemental, **Cy_elemental, **Cz_elemental; 
+double **CxT_elemental, **CyT_elemental, **CzT_elemental;
+double **Cx_elemental_add, **Cy_elemental_add, **Cz_elemental_add; 
 real *Cx, *Cy, *Cz;
-real *val, *val_f, *K_12, *K_13;
+real *CxT, *CyT, *CzT;
+
 real *val_deltaP, *F_deltaP;
 int *row_deltaP, *col_deltaP;
 
@@ -89,10 +95,15 @@ void gaussQuad();
 void calcShape();
 void calcJacobian();
 void initGlobalSysVariables();
+void calcPressureGradientOp();
+void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental,
+                                        double **CxT_elemental, double **CyT_elemental, double **CzT_elemental);
+void assemble_pressureGradientOp_map(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental,
+                                            double **CxT_elemental, double **CyT_elemental, double **CzT_elemental);
 void calcGlobalSys_p();
-void assemble_p(int e, double **Ke_11, double **Ke_14);
 void calcGlobalSys_mom();
-void assemble_mom(int e, double **Ke_11, double **Ke_12, double **Ke_13, double **Ke_14);
+void assemble_mom(int e, double **Ke_1, double **Ke_2, double **Ke_3);
+void assemble_mom_map(int e, double **Ke_1, double **Ke_2, double **Ke_3);
 void applyBC();
 void applyBC_p();
 void applyBC_deltaP();
@@ -112,6 +123,9 @@ double getHighResolutionTime();
 #endif
 #ifdef CG_CUSP
    extern void CUSP_pC_CUSP_CG();
+#endif
+#ifdef CR_CUSP
+   extern void CUSP_pC_CUSP_CR();
 #endif
 
 //momentum equation solvers
@@ -166,6 +180,11 @@ int main()
    initGlobalSysVariables();
    End = getHighResolutionTime();
    printf("Time for InitVar  = %-.4g seconds.\n", End - Start);
+   
+   Start = getHighResolutionTime(); 
+   calcPressureGradientOp();   
+   End = getHighResolutionTime();
+   printf("Time for C vecs   = %-.4g seconds.\n", End - Start);
    
    Start = getHighResolutionTime();
    solve();
@@ -495,17 +514,8 @@ void compressedSparseRowStorage()
       }      
    }  
 
-   NNZ = rowStartsSmall[NN];
-
-   // Allocate and initialize the val vectors
-   val = new real[rowStartsSmall[NN]];  
+   NNZ = rowStartsSmall[NN];  
    
-   val_f = new real[rowStartsSmall[NN]];
-   
-   K_12 = new real[rowStartsSmall[NN]]; 
-   
-   K_13 = new real[rowStartsSmall[NN]]; 
-
    // Create CSR vectors for diagonal matrix
    rowStartsDiagonal = new int[NN+1];
    for(i=0; i<=NN; i++) {
@@ -515,17 +525,6 @@ void compressedSparseRowStorage()
    colDiagonal = new int[rowStartsDiagonal[NN]];
    for(i=0; i<NN; i++) {
       colDiagonal[i] = i;
-   }  
-   
-   // Create K to Kdia map 
-   KtoKdiaMap = new int[NN];
-   for(i=0; i<NN; i++) {
-      for(j=rowStartsSmall[i]; j<rowStartsSmall[i+1]; j++) {
-         if(colSmall[j]==i){
-            KtoKdiaMap[i] = j;
-            break;
-         }
-      }
    }
    
    for (i = 0; i<NN; i++) {
@@ -910,32 +909,71 @@ void initGlobalSysVariables()
    
    int i;
    
-   F = new real[NN];
+   K_1 = new real[rowStartsSmall[NN]];   //K_1 will be used for K_uu, K_vv, K_ww 
+   K_2 = new real[rowStartsSmall[NN]];   //K_2 will be used for K_uv, K_vu, K_wu 
+   K_3 = new real[rowStartsSmall[NN]];   //K_3 will be used for K_uw, K_vw, K_wv 
+   
+   Cx = new real[rowStartsSmall[NN]];  
+   Cy = new real[rowStartsSmall[NN]]; 
+   Cz = new real[rowStartsSmall[NN]];   
 
-   for (i=0; i<NN; i++) {
-      F[i] = 0;
+   CxT = new real[rowStartsSmall[NN]];   //transpose of Cx    
+   CyT = new real[rowStartsSmall[NN]];   //transpose of Cy 
+   CzT = new real[rowStartsSmall[NN]];   //transpose of Cz     
+   
+   for (i=0; i<rowStartsSmall[NN]; i++) {
+      K_1[i] = 0.0;   
+      K_2[i] = 0.0;
+      K_3[i] = 0.0;    
+      Cx[i] = 0.0;
+      Cy[i] = 0.0;
+      Cz[i] = 0.0;
+      CxT[i] = 0.0;
+      CyT[i] = 0.0;
+      CzT[i] = 0.0;   
    }
    
-   Ke_11 = new double*[NENv];
-   Ke_12 = new double*[NENv];
-   Ke_13 = new double*[NENv];
-   Ke_14 = new double*[NENv];
+   Cx_elemental = new double*[NENv];
+   Cy_elemental = new double*[NENv];
+   Cz_elemental = new double*[NENv];
+   CxT_elemental = new double*[NENv];
+   CyT_elemental = new double*[NENv];
+   CzT_elemental = new double*[NENv];
+
+   Cx_elemental_add = new double*[NENv];
+   Cy_elemental_add = new double*[NENv];
+   Cz_elemental_add = new double*[NENv];
    
-   Ke_11_add = new double*[NENv];
-   Ke_12_add = new double*[NENv];
-   Ke_13_add = new double*[NENv];   
-   Ke_14_add = new double*[NENv];
+   for (i=0; i<NENv; i++) {
+      Cx_elemental[i] = new double[NENv];
+      Cy_elemental[i] = new double[NENv];
+      Cz_elemental[i] = new double[NENv];
+      CxT_elemental[i] = new double[NENv];
+      CyT_elemental[i] = new double[NENv];
+      CzT_elemental[i] = new double[NENv];
+
+      Cx_elemental_add[i] = new double[NENv];
+      Cy_elemental_add[i] = new double[NENv];
+      Cz_elemental_add[i] = new double[NENv];
+   }
+
+   
+   Ke_1 = new double*[NENv];
+   Ke_2 = new double*[NENv];
+   Ke_3 = new double*[NENv];
+   
+   Ke_1_add = new double*[NENv];
+   Ke_2_add = new double*[NENv];
+   Ke_3_add = new double*[NENv];   
 
    for (i=0; i<NENv; i++) {
-      Ke_11[i] = new double[NENv];
-      Ke_12[i] = new double[NENv];
-      Ke_13[i] = new double[NENv];      
-      Ke_14[i] = new double[NENp];
+      Ke_1[i] = new double[NENv];
+      Ke_2[i] = new double[NENv];
+      Ke_3[i] = new double[NENv];      
 
-      Ke_11_add[i] = new double[NENv];
-      Ke_12_add[i] = new double[NENv];
-      Ke_13_add[i] = new double[NENv];      
-      Ke_14_add[i] = new double[NENp];
+      Ke_1_add[i] = new double[NENv];
+      Ke_2_add[i] = new double[NENv];
+      Ke_3_add[i] = new double[NENv];      
    }
    
    uNodal = new double[NENv];
@@ -950,12 +988,12 @@ void initGlobalSysVariables()
    v = new real[NN];
    w = new real[NN];
    p = new real[NN];  
-   pPrime = new real[NN];
+   delta_p = new real[NN];
    velVector = new real[NN];
 
-   uDiagonal = new real[NN];
-   vDiagonal = new real[NN];
-   wDiagonal = new real[NN]; 
+   K_u_diagonal = new real[NN];
+   K_v_diagonal = new real[NN];
+   K_w_diagonal = new real[NN]; 
    tempDiagonal = new real[NN];  
    
    // Initial guesses for unknowns 
@@ -964,36 +1002,227 @@ void initGlobalSysVariables()
       v[i] = 0.0;
       w[i] = 0.0;
       p[i] = 0.0;
-      pPrime[i] = 0.0;
+      delta_p[i] = 0.0;
       velVector[i] = 0.0; 
-      uDiagonal[i] = 0.0;
-      vDiagonal[i] = 0.0;
-      wDiagonal[i] = 0.0;   
+      K_u_diagonal[i] = 0.0;
+      K_v_diagonal[i] = 0.0;
+      K_w_diagonal[i] = 0.0;   
       tempDiagonal[i] = 0.0;      
-   }  
-
-   Cx = new real[rowStartsSmall[NN]];
-   Cy = new real[rowStartsSmall[NN]];
-   Cz = new real[rowStartsSmall[NN]];
+   } 
    
-   for (i=0; i<rowStartsSmall[NN]; i++) {
-      Cx[i] = 0.0;
-      Cy[i] = 0.0;
-      Cz[i] = 0.0;
+   F = new real[NN];   //RHS vector for momentum equations ([4e],[4f],[4g])
+
+   for (i=0; i<NN; i++) {
+      F[i] = 0;
+   }
+
+   
+   //-----------Ke to K map selection----------------------------
+   //KeKMap : costs memory([NE][NENv][NENv]*4byte), runs faster. (default)
+   //KeKMapSmall : negligible memory, runs slower. Steps to use;
+   //               (1) Comment out KeKMapUSE parts
+   //               (2) Uncomment KeKMapSmallUSE parts
+   //------------------------------------------------------------   
+   
+   //-----KeKMapUSE-----
+   int *eLtoG, loc, colCounter, k, e, j;   
+   
+   KeKMap = new int**[NE];                //Keeps elemental to global stiffness matrix's mapping data
+   for(e=0; e<NE; e++) {                  //It costs some memory([NE][NENv][NENv]*4byte) but makes assembly function runs faster.
+      KeKMap[e] = new int*[NENv];
+      for(j=0; j<NENv; j++) {
+         KeKMap[e][j] = new int[NENv];
+      }
    }
    
-   for(i=0; i<rowStartsSmall[NN]; i++) {
-      val[i] = 0;
-      val_f[i] = 0;
-      K_12[i] = 0;
-      K_13[i] = 0; 
-   }    
+   eLtoG = new int[NENv];           // elemental LtoG data    
+   
+   for(e=0; e<NE; e++) {
+
+      for(k=0; k<NENv; k++) {
+         eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
+      } 
+
+      for(i=0; i<NENv; i++) {
+         for(j=0; j<NENv; j++) {
+            colCounter=0;
+            for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
+               if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
+                  KeKMap[e][i][j] = colCounter; 
+                  break;
+               }
+               colCounter++;
+            }
+         }
+      }   
+   }
+   delete[] eLtoG;
+   //-----KeKMapUSE-----
+   
    
    if(isRestart) {
       readRestartFile();
    }
-} 
+}
 
+
+
+
+//------------------------------------------------------------------------------
+void calcPressureGradientOp()
+//------------------------------------------------------------------------------
+{
+   // Calculates Cx_elemental, Cy_elemental, Cz_elemental one by one for each element and assembles them into
+   // the global Cx, Cy, Cz and CxT, CyT, CzT.
+   int e, i, j, k, m, n, node;   
+   
+   for (e = 0; e<NE; e++) {
+      // Intitialize Ke and Fe to zero.
+
+      for (i=0; i<NENv; i++) {
+         for (j=0; j<NENp; j++) {
+            Cx_elemental[i][j] = 0;
+            Cy_elemental[i][j] = 0;
+            Cz_elemental[i][j] = 0;       
+            CxT_elemental[i][j] = 0;
+            CyT_elemental[i][j] = 0;
+            CzT_elemental[i][j] = 0;                
+         }      
+      }  
+      
+      for (k = 0; k<NGP; k++) {   // Gauss quadrature loop
+         
+         for (i=0; i<NENv; i++) {
+            for (j=0; j<NENp; j++) {
+               Cx_elemental_add[i][j] = 0;
+               Cy_elemental_add[i][j] = 0;
+               Cz_elemental_add[i][j] = 0;
+            }         
+         }
+
+         for (i=0; i<NENv; i++) {
+            for (j=0; j<NENp; j++) {
+               Cx_elemental_add[i][j] = Cx_elemental_add[i][j] + gDSv[e][0][i][k] * Sp[j][k];
+               Cy_elemental_add[i][j] = Cy_elemental_add[i][j] + gDSv[e][1][i][k] * Sp[j][k];
+               Cz_elemental_add[i][j] = Cz_elemental_add[i][j] + gDSv[e][2][i][k] * Sp[j][k];               
+            }         
+         }
+         
+         for (i=0; i<NENv; i++) {
+            for (j=0; j<NENp; j++) {               
+               Cx_elemental[i][j] += Cx_elemental_add[i][j] * detJacob[e][k] * GQweight[k];
+               Cy_elemental[i][j] += Cy_elemental_add[i][j] * detJacob[e][k] * GQweight[k];
+               Cz_elemental[i][j] += Cz_elemental_add[i][j] * detJacob[e][k] * GQweight[k];               
+            }    
+         }
+
+      }   // End GQ loop
+      
+      for (i=0; i<NENv; i++) {
+         for (j=0; j<NENp; j++) {
+            CxT_elemental[j][i] = Cx_elemental[i][j] ;
+            CyT_elemental[j][i] = Cy_elemental[i][j] ;
+            CzT_elemental[j][i] = Cz_elemental[i][j] ;
+         }
+      }
+      
+      //-----KeKMapSmallUSE-----
+      //assemble_pressureGradientOp(e, Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental);
+      //-----KeKMapSmallUSE-----      
+      
+      //-----KeKMapUSE-----
+      assemble_pressureGradientOp_map(e, Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental);
+      //-----KeKMapUSE-----
+   }   // End element loop
+
+}
+
+
+
+
+//------------------------------------------------------------------------------
+void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental, double **CxT_elemental, double **CyT_elemental, double **CzT_elemental)
+//------------------------------------------------------------------------------
+{
+   // Inserts Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental into proper locations of
+   // the global Cx, Cy, Cz and CxT, CyT, CzT.
+
+   int i, j;
+
+   // Create KeKMapSmall, which stores the mapping between the entries of Ke
+   // and val vector of CSR.
+
+   int *eLtoG, loc, colCounter, k;
+    
+   eLtoG = new int[NENv];           // elemental LtoG data
+   for(k=0; k<NENv; k++) {
+      eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
+   } 
+
+   KeKMapSmall = new int*[NENv];
+   for(j=0; j<NENv; j++) {
+      KeKMapSmall[j] = new int[NENv];
+   }
+
+   for(i=0; i<NENv; i++) {
+      for(j=0; j<NENv; j++) {
+         colCounter=0;
+         for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
+            if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
+               KeKMapSmall[i][j] = colCounter; 
+               break;
+            }
+            colCounter++;
+         }
+      }
+   }
+   
+   // Creating Cx, Cy, Cz and CxT, CyT, CzT value vectors for sparse storage
+   for(i=0; i<NENv; i++) {
+      for(j=0; j<NENv; j++) {
+         Cx[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cx_elemental[i][j] ;
+         Cy[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cy_elemental[i][j] ;  
+         Cz[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cz_elemental[i][j] ;  
+         CxT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CxT_elemental[i][j] ;  
+         CyT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CyT_elemental[i][j] ;  
+         CzT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CzT_elemental[i][j] ;         
+      }
+   }
+
+   
+   for (int i = 0; i<NENv; i++) {
+      delete[] KeKMapSmall[i];
+   }
+   delete[] KeKMapSmall;
+
+   delete[] eLtoG;
+   
+} // End of function assemble()
+
+
+
+
+//------------------------------------------------------------------------------
+void assemble_pressureGradientOp_map(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental,
+                                            double **CxT_elemental, double **CyT_elemental, double **CzT_elemental)
+//------------------------------------------------------------------------------
+{
+   // Inserts Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental into proper locations of
+   // the global Cx, Cy, Cz and CxT, CyT, CzT.
+   int i, j;
+
+   // Creating Cx, Cy, Cz and CxT, CyT, CzT value vectors for sparse storage
+   for(i=0; i<NENv; i++) {
+      for(j=0; j<NENv; j++) {
+         Cx[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cx_elemental[i][j] ;
+         Cy[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cy_elemental[i][j] ;  
+         Cz[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cz_elemental[i][j] ;  
+         CxT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CxT_elemental[i][j] ;  
+         CyT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CyT_elemental[i][j] ;  
+         CzT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CzT_elemental[i][j] ;         
+      }
+   }
+} // End of function assemble()
 
 
 
@@ -1004,8 +1233,7 @@ void calcGlobalSys_p()
    // Calculates Ke and Fe one by one for each element and assembles them into
    // the global K and F.
 
-   int e, i, j, k, m, n, node, valSwitch;
-   double Tau;
+   int e, i, j, k, m, n, node;
    int factor[3];
    
    switch (phase) {
@@ -1025,11 +1253,6 @@ void calcGlobalSys_p()
          factor[2] = 2;      
       break;
    }
-
-   for(i=0; i<rowStartsSmall[NN]; i++) {
-      val[i] = 0;
-      val_f[i] = 0;      
-   }
    
    for(i=0; i<rowStartsDiagonal[NN]; i++) {
       tempDiagonal[i] = 0;
@@ -1042,11 +1265,8 @@ void calcGlobalSys_p()
 
       for (i=0; i<NENv; i++) {
          for (j=0; j<NENv; j++) {
-            Ke_11[i][j] = 0;
-         }
-         for (j=0; j<NENp; j++) {
-            Ke_14[i][j] = 0;
-         }         
+            Ke_1[i][j] = 0;
+         }      
       }  
       
       for (i=0; i<NENv; i++) {
@@ -1083,34 +1303,25 @@ void calcGlobalSys_p()
          
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
-               Ke_11_add[i][j] = 0;
-            }
-            for (j=0; j<NENp; j++) {
-               Ke_14_add[i][j] = 0;
-            }         
+               Ke_1_add[i][j] = 0;
+            }       
          }
 
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
-               Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
+               Ke_1_add[i][j] = Ke_1_add[i][j] + viscosity * (
                      factor[0] * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
                      factor[1] * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
                      factor[2] * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
                      density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
                      
-            }
-            for (j=0; j<NENp; j++) {
-               Ke_14_add[i][j] = Ke_14_add[i][j] + gDSv[e][phase][i][k] * Sp[j][k];
-            }         
+            }        
          }
          
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {            
-               Ke_11[i][j] += Ke_11_add[i][j] * detJacob[e][k] * GQweight[k];
-            }
-            for (j=0; j<NENp; j++) {               
-               Ke_14[i][j] += Ke_14_add[i][j] * detJacob[e][k] * GQweight[k];
-            }    
+               Ke_1[i][j] += Ke_1_add[i][j] * detJacob[e][k] * GQweight[k];
+            }   
          }
 
       }   // End GQ loop 
@@ -1118,11 +1329,8 @@ void calcGlobalSys_p()
       // Create diagonal matrices
 
       for (i=0; i<NENv; i++) {
-         tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_11[i][i];
-         Ke_11[i][i] += (alpha[0]/(1-alpha[0]))*Ke_11[i][i];
+         tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_1[i][i];
       }
-
-      assemble_p(e, Ke_11, Ke_14);  // Send Ke_11 and Ke_14 for creating val and val_f (Cx, Cy, Cz) vectors   
 
    }   // End element loop
  
@@ -1132,72 +1340,11 @@ void calcGlobalSys_p()
 
 
 //------------------------------------------------------------------------------
-void assemble_p(int e, double **Ke_11, double **Ke_14)
-//------------------------------------------------------------------------------
-{
-   // Inserts Fe into proper locations of F.
-
-   int i, j;
-
-   // Create KeKMapSmall, which stores the mapping between the entries of Ke
-   // and val vector of CSR.
-
-   // TODO: Why do we calculate KeKmapSmall in each iteration again and again? Isn't it costly?
-   //       Is it feasible to calculate it for each element only once and store?
-
-   int *eLtoG, loc, colCounter, k;
-    
-   eLtoG = new int[NENv];           // elemental LtoG data
-   for(k=0; k<NENv; k++) {
-      eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
-   } 
-
-   KeKMapSmall = new int*[NENv];
-   for(j=0; j<NENv; j++) {
-      KeKMapSmall[j] = new int[NENv];
-   }
-
-   for(i=0; i<NENv; i++) {
-      for(j=0; j<NENv; j++) {
-         colCounter=0;
-         for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
-            if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
-               KeKMapSmall[i][j] = colCounter; 
-               break;
-            }
-            colCounter++;
-         }
-      }
-   }
-   
-   // Creating val vector
-   for(i=0; i<NENv; i++) {
-      for(j=0; j<NENv; j++) {
-         val[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_11[i][j] ;
-         
-         val_f[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_14[i][j] ;      
-      }
-   }
-
-   
-   for (int i = 0; i<NENv; i++) {
-      delete[] KeKMapSmall[i];
-   }
-   delete[] KeKMapSmall;
-
-   delete[] eLtoG;
-   
-} // End of function assemble()
-
-
-
-
-//------------------------------------------------------------------------------
 void calcGlobalSys_mom()
 //------------------------------------------------------------------------------
 {
-   // Calculates Ke and Fe one by one for each element and assembles them into
-   // the global K and F.
+   // Calculates Ke's one by one for each element and assembles them into
+   // the global K's.
 
    int e, i, j, k, m, n, node, valSwitch;
    double Tau;
@@ -1229,10 +1376,9 @@ void calcGlobalSys_mom()
    }
 
    for(i=0; i<rowStartsSmall[NN]; i++) {
-      val[i] = 0;
-      val_f[i] = 0;      
-      K_12[i] = 0;      
-      K_13[i] = 0;
+      K_1[i] = 0;     
+      K_2[i] = 0;      
+      K_3[i] = 0;
    }
    
    for(i=0; i<rowStartsDiagonal[NN]; i++) {
@@ -1246,17 +1392,14 @@ void calcGlobalSys_mom()
 
       for (i=0; i<NENv; i++) {
          for (j=0; j<NENv; j++) {
-            Ke_11[i][j] = 0;
+            Ke_1[i][j] = 0;
          }
          for (j=0; j<NENv; j++) {
-            Ke_12[i][j] = 0;
+            Ke_2[i][j] = 0;
          }
          for (j=0; j<NENp; j++) {
-            Ke_13[i][j] = 0;
-         }           
-         for (j=0; j<NENp; j++) {
-            Ke_14[i][j] = 0;
-         }         
+            Ke_3[i][j] = 0;
+         }    
       }  
       
       for (i=0; i<NENv; i++) {
@@ -1293,49 +1436,40 @@ void calcGlobalSys_mom()
          
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
-               Ke_11_add[i][j] = 0;
+               Ke_1_add[i][j] = 0;
             }
             for (j=0; j<NENv; j++) {
-               Ke_12_add[i][j] = 0;
+               Ke_2_add[i][j] = 0;
             }
             for (j=0; j<NENv; j++) {
-               Ke_13_add[i][j] = 0;
-            }
-            for (j=0; j<NENp; j++) {
-               Ke_14_add[i][j] = 0;
-            }         
+               Ke_3_add[i][j] = 0;
+            }       
          }
 
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {
-               Ke_11_add[i][j] = Ke_11_add[i][j] + viscosity * (
+               Ke_1_add[i][j] = Ke_1_add[i][j] + viscosity * (
                      factor[0] * gDSv[e][0][i][k] * gDSv[e][0][j][k] + 
                      factor[1] * gDSv[e][1][i][k] * gDSv[e][1][j][k] +
                      factor[2] * gDSv[e][2][i][k] * gDSv[e][2][j][k]) +
                      density * Sv[i][k] * (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]);
                      
-               Ke_12_add[i][j] = Ke_12_add[i][j] + viscosity * gDSv[e][factor2[0]][i][k] * gDSv[e][phase][j][k];
+               Ke_2_add[i][j] = Ke_2_add[i][j] + viscosity * gDSv[e][factor2[0]][i][k] * gDSv[e][phase][j][k];
                
-               Ke_13_add[i][j] = Ke_13_add[i][j] + viscosity * gDSv[e][factor2[1]][i][k] * gDSv[e][phase][j][k];        
-            }
-            for (j=0; j<NENp; j++) {
-               Ke_14_add[i][j] = Ke_14_add[i][j] + gDSv[e][phase][i][k] * Sp[j][k];
-            }         
+               Ke_3_add[i][j] = Ke_3_add[i][j] + viscosity * gDSv[e][factor2[1]][i][k] * gDSv[e][phase][j][k];        
+            }      
          }
          
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENv; j++) {            
-               Ke_11[i][j] += Ke_11_add[i][j] * detJacob[e][k] * GQweight[k];
+               Ke_1[i][j] += Ke_1_add[i][j] * detJacob[e][k] * GQweight[k];
             }
             for (j=0; j<NENv; j++) {            
-               Ke_12[i][j] += Ke_12_add[i][j] * detJacob[e][k] * GQweight[k];
+               Ke_2[i][j] += Ke_2_add[i][j] * detJacob[e][k] * GQweight[k];
             }
             for (j=0; j<NENv; j++) {            
-               Ke_13[i][j] += Ke_13_add[i][j] * detJacob[e][k] * GQweight[k];
-            }            
-            for (j=0; j<NENp; j++) {               
-               Ke_14[i][j] += Ke_14_add[i][j] * detJacob[e][k] * GQweight[k];
-            }    
+               Ke_3[i][j] += Ke_3_add[i][j] * detJacob[e][k] * GQweight[k];
+            }   
          }
 
       }   // End GQ loop  
@@ -1343,12 +1477,18 @@ void calcGlobalSys_mom()
       // Create diagonal matrices
 
       for (i=0; i<NENv; i++) {
-         tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_11[i][i];
-         Ke_11[i][i] += (alpha[0]/(1.0-alpha[0]))*Ke_11[i][i];
+         tempDiagonal[LtoG[e][i]] = tempDiagonal[LtoG[e][i]] + Ke_1[i][i];
+         Ke_1[i][i] += (alpha[0]/(1.0-alpha[0]))*Ke_1[i][i];
       }      
       
-      assemble_mom(e, Ke_11, Ke_12, Ke_13, Ke_14);  // Send Ke_11 and Ke_14 for creating val and val_f (Cx, Cy, Cz) vectors   
-
+      //-----KeKMapSmallUSE-----  
+      //assemble_mom(e, Ke_1, Ke_2, Ke_3);  // Send Ke_1, Ke_2, Ke_3  for creating K_1, K_2, K_3  
+      //-----KeKMapSmallUSE-----  
+      
+      //-----KeKMapUSE-----  
+      assemble_mom_map(e, Ke_1, Ke_2, Ke_3);  // Send Ke_1, Ke_2, Ke_3  for creating K_1, K_2, K_3  
+      //-----KeKMapUSE-----       
+      
    }   // End element loop
  
 } // End of function calcGlobalSys()
@@ -1357,18 +1497,15 @@ void calcGlobalSys_mom()
 
 
 //------------------------------------------------------------------------------
-void assemble_mom(int e, double **Ke_11, double **Ke_12, double **Ke_13, double **Ke_14)
+void assemble_mom(int e, double **Ke_1, double **Ke_2, double **Ke_3)
 //------------------------------------------------------------------------------
 {
-   // Inserts Fe into proper locations of F.
+   // Inserts Ke's into proper locations of K's.
 
    int i, j;
 
    // Create KeKMapSmall, which stores the mapping between the entries of Ke
    // and val vector of CSR.
-
-   // TODO: Why do we calculate KeKmapSmall in each iteration again and again? Isn't it costly?
-   //       Is it feasible to calculate it for each element only once and store?
 
    int *eLtoG, loc, colCounter, k;
     
@@ -1395,13 +1532,12 @@ void assemble_mom(int e, double **Ke_11, double **Ke_12, double **Ke_13, double 
       }
    }
    
-   // Creating val vector
+   // Creating K's value vectors
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
-         val[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_11[i][j] ;
-         K_12[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_12[i][j] ;
-         K_13[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_13[i][j] ;
-         val_f[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_14[i][j] ;      
+         K_1[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_1[i][j] ;
+         K_2[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_2[i][j] ;
+         K_3[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Ke_3[i][j] ;   
       }
    }
 
@@ -1412,6 +1548,26 @@ void assemble_mom(int e, double **Ke_11, double **Ke_12, double **Ke_13, double 
    delete[] KeKMapSmall;
 
    delete[] eLtoG;
+   
+} // End of function assemble()
+
+
+
+
+//------------------------------------------------------------------------------
+void assemble_mom_map(int e, double **Ke_1, double **Ke_2, double **Ke_3)
+//------------------------------------------------------------------------------
+{
+   // Inserts Ke's into proper locations of K's.
+   int i, j;
+   
+   for(i=0; i<NENv; i++) {
+      for(j=0; j<NENv; j++) {
+         K_1[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Ke_1[i][j] ;
+         K_2[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Ke_2[i][j] ;
+         K_3[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Ke_3[i][j] ;   
+      }
+   }
    
 } // End of function assemble()
 
@@ -1449,9 +1605,9 @@ void applyBC()
       whichBC = velNodes[i][1]-1;      // Number of the specified BC 
       
       for (j=rowStartsSmall[node]; j<rowStartsSmall[node+1]; j++) {
-         val[j] = 0.0;
+         K_1[j] = 0.0;
       }
-      val[ rowStartsSmall[node] + colCounter ] = 1;
+      K_1[ rowStartsSmall[node] + colCounter ] = 1;
 
       switch (phase) {
          case 0:
@@ -1500,10 +1656,10 @@ void applyBC_p()
       
       whichBC = pressureNodes[i][1]-1;      // Number of the specified BC   	
       
-      for (j=rowStartsSmall[node]; j<rowStartsSmall[node+1]; j++) {
-         val_f[j] = 0.0;
-      }
-      val_f[ rowStartsSmall[node] + colCounter ] = 1;
+      // for (j=rowStartsSmall[node]; j<rowStartsSmall[node+1]; j++) {
+         // val_f[j] = 0.0;
+      // }
+      // val_f[ rowStartsSmall[node] + colCounter ] = 1;
       
       p[node] = BCstrings[whichBC][0];    // Specified value of the PV          
    } 
@@ -1588,7 +1744,7 @@ void vectorProduct()
       // f_z = - K_wu*u - K_wv*v
       cudaMalloc((void**)&d_rTemp, NN*sizeof(real));  
 
-      cudaMemcpy(d_val, K_12, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);    
+      cudaMemcpy(d_val, K_2, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);    
       switch (phase) {
          case 0:
             cudaMemcpy(d_x, v, NN*sizeof(real), cudaMemcpyHostToDevice); 
@@ -1607,7 +1763,7 @@ void vectorProduct()
          cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_rTemp);
       #endif
       
-      cudaMemcpy(d_val, K_13, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);
+      cudaMemcpy(d_val, K_3, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);
       switch (phase) {
          case 0:
             cudaMemcpy(d_x, w, NN*sizeof(real), cudaMemcpyHostToDevice); 
@@ -1634,7 +1790,17 @@ void vectorProduct()
       
       // Calculate part of a RHS of the momentum equations ([4e], [4f])
       // C_x * p^(i+1), C_y * p^(i+1), C_z * p^(i+1)
-      cudaMemcpy(d_val, val_f, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);    
+      switch (phase) {
+         case 0:
+            cudaMemcpy(d_val, Cx, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            break;
+         case 1:
+            cudaMemcpy(d_val, Cy, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            break;
+         case 2:
+            cudaMemcpy(d_val, Cz, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            break;
+      }    
       cudaMemcpy(d_x, p, NN*sizeof(real), cudaMemcpyHostToDevice);
       
       #ifdef SINGLE
@@ -1668,7 +1834,7 @@ void vectorProduct()
             break;
       }
 
-      cudaMemcpy(d_x, pPrime, NN*sizeof(real), cudaMemcpyHostToDevice);
+      cudaMemcpy(d_x, delta_p, NN*sizeof(real), cudaMemcpyHostToDevice);
       
       #ifdef SINGLE
          cusparseScsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
@@ -1719,35 +1885,26 @@ void solve()
          switch (phase) {
             case 0:
                for(i=0; i<rowStartsDiagonal[NN]; i++) {
-                  uDiagonal[i] = tempDiagonal[i];
-               }
-               for (i=0; i<NNZ; i++) {
-                  Cx[i] = val_f[i];
+                  K_u_diagonal[i] = tempDiagonal[i];
                }
                break;
             case 1:
                for(i=0; i<rowStartsDiagonal[NN]; i++) {
-                  vDiagonal[i] = tempDiagonal[i];
-               }
-               for (i=0; i<NNZ; i++) {
-                  Cy[i] = val_f[i];
-               }     
+                  K_v_diagonal[i] = tempDiagonal[i];
+               }    
                break;
             case 2:
                for(i=0; i<rowStartsDiagonal[NN]; i++) {
-                  wDiagonal[i] = tempDiagonal[i];
-               }
-               for (i=0; i<NNZ; i++) {
-                  Cz[i] = val_f[i];
-               }     
+                  K_w_diagonal[i] = tempDiagonal[i];
+               }    
                break;
          }
       }
 
       for (i=0; i<NN; i++) {
-         uDiagonal[i] = 1.0/uDiagonal[i];
-         vDiagonal[i] = 1.0/vDiagonal[i];
-         wDiagonal[i] = 1.0/wDiagonal[i];
+         K_u_diagonal[i] = 1.0/K_u_diagonal[i];
+         K_v_diagonal[i] = 1.0/K_v_diagonal[i];
+         K_w_diagonal[i] = 1.0/K_w_diagonal[i];
       }
       
       End3 = getHighResolutionTime();
@@ -1769,6 +1926,9 @@ void solve()
       #ifdef CG_CUSP
          CUSP_pC_CUSP_CG();
       #endif
+      #ifdef CR_CUSP
+         CUSP_pC_CUSP_CR();
+      #endif      
       End3 = getHighResolutionTime();
       printf("   Time for CUSP op's + CR solver      = %-.4g seconds.\n", End3 - Start3);      
       
@@ -1787,17 +1947,17 @@ void solve()
          switch (phase) {
             case 0:
                for (i=0; i<NN; i++) {
-                  u[i] += uDiagonal[i]*F[i];
+                  u[i] += K_u_diagonal[i]*F[i];
                }
                break;
             case 1:
                for (i=0; i<NN; i++) {
-                  v[i] += vDiagonal[i]*F[i];
+                  v[i] += K_v_diagonal[i]*F[i];
                } 
                break;
             case 2:
                for (i=0; i<NN; i++) {
-                  w[i] += wDiagonal[i]*F[i];
+                  w[i] += K_w_diagonal[i]*F[i];
                }  
                break;
          }
@@ -1805,7 +1965,7 @@ void solve()
       }
       
       for (i=0; i<NN; i++) {
-         p[i] = p[i] + (1.0-alpha[3]) * pPrime[i];
+         p[i] = p[i] + (1.0-alpha[3]) * delta_p[i];
       }
       
       End2 = getHighResolutionTime();
@@ -1829,23 +1989,14 @@ void solve()
          
          switch (phase) {
             case 0:
-               for (i=0; i<NNZ; i++) {
-                  Cx[i] = val_f[i];
-               }
                End3 = getHighResolutionTime();                  
                printf("      Time for calcGlobalSys for x        = %-.4g seconds.\n", End3 - Start3); 
                break;
             case 1:
-               for (i=0; i<NNZ; i++) {
-                  Cy[i] = val_f[i];
-               }     
                End3 = getHighResolutionTime();                  
                printf("      Time for calcGlobalSys for y        = %-.4g seconds.\n", End3 - Start3); 
                break;
-            case 2:
-               for (i=0; i<NNZ; i++) {
-                  Cz[i] = val_f[i];
-               }     
+            case 2: 
                End3 = getHighResolutionTime();                  
                printf("      Time for calcGlobalSys for z        = %-.4g seconds.\n", End3 - Start3); 
                break;
@@ -1859,7 +2010,7 @@ void solve()
 
          Start3 = getHighResolutionTime();           
          vectorOperationNo = 1;
-         vectorProduct();
+         vectorProduct();   //calculates f_u + C_x * p (@GPU) or f_v + C_y * p (@GPU) or f_w + C_z * p (@GPU) acoording to phase
          End3 = getHighResolutionTime();
          switch (phase) {
             case 0:                 
@@ -1956,10 +2107,10 @@ void solve()
       //-----------------------------------------
       
       Start2 = getHighResolutionTime();   
-      maxChange = abs(pPrime[0]);
+      maxChange = abs(delta_p[0]);
       
       for (i=1; i<NN; i++) {
-         change = abs(pPrime[i]);
+         change = abs(delta_p[i]);
          if (change > maxChange) {
             maxChange = change;
          }

@@ -15,7 +15,7 @@ using namespace std;
 
 extern int *rowStartsSmall, *colSmall, NN, NNZ, solverIterMax;
 extern double solverTol;
-extern real2 *velVector, *val, *F;
+extern real2 *velVector, *K_1, *F;
 
 //-----------------------------------------------------------------------------
 void CUSP_BiCG()
@@ -40,7 +40,7 @@ void CUSP_BiCG()
    thrust::copy(colSmall,colSmall +  NNZ,A.column_indices.begin());
 
    // Copy CSR values to device memory
-   thrust::copy(val,val + NNZ,A.values.begin()); 
+   thrust::copy(K_1,K_1 + NNZ,A.values.begin()); 
 
    // Copy right hand side vector to device memory
    thrust::copy(F,F + NN,b.begin());
