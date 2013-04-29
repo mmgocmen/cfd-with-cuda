@@ -901,6 +901,7 @@ void calcJacobian()
 
 
 
+
 //------------------------------------------------------------------------------
 void initGlobalSysVariables()
 //------------------------------------------------------------------------------
@@ -1055,7 +1056,7 @@ void initGlobalSysVariables()
             }
          }
       }   
-   }
+   } // end element loop
    delete[] eLtoG;
    //-----KeKMapUSE-----
    
@@ -1707,6 +1708,7 @@ void applyBC_deltaP()
 
 
 
+
 //------------------------------------------------------------------------------
 void vectorProduct()
 //------------------------------------------------------------------------------
@@ -1850,7 +1852,7 @@ void vectorProduct()
    cudaFree(d_val);
    cudaFree(d_x);
    cudaFree(d_r);
-}
+} // End of function vectorProduct()
 
 
 
@@ -1899,7 +1901,7 @@ void solve()
                }    
                break;
          }
-      }
+      } // End phase loop
 
       for (i=0; i<NN; i++) {
          K_u_diagonal[i] = 1.0/K_u_diagonal[i];
@@ -1962,7 +1964,7 @@ void solve()
                break;
          }
          applyBC();
-      }
+      } // end phase loop
       
       for (i=0; i<NN; i++) {
          p[i] = p[i] + (1.0-alpha[3]) * delta_p[i];
@@ -2089,7 +2091,7 @@ void solve()
                printf("   Total time for solving z-momentum   = %-.4g seconds.\n", End4 - Start4);                   
                break;
          }
-      }
+      } // End phase loop
       for (i=0; i<NN; i++) {
          u[i] = u_temp[i];
          v[i] = v_temp[i];
@@ -2152,7 +2154,7 @@ void solve()
          // cout << "A DAT file is created for Tecplot." << endl;
       }      
         
-   }
+   } // End iter loop
    
    
    // Giving info about convergence
