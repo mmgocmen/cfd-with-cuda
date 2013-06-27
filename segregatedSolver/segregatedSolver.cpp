@@ -8,6 +8,17 @@
 *                Middle East Technical University                *
 *                         Ankara, Turkey                         *
 *            http://www.me.metu.edu.tr/people/cuneyt             *
+*                                                                *
+*                                                                *
+* The following definitions can be made during compilation       *
+*                                                                *
+* -DSIGLE     : Major variables are defined as single precision  *
+* -DCG_CUDA   : Pressure correction equation solver selection    *
+* -DCR_CUDA   :    "                                             *
+* -DCG_CUSP   :    "                                             *
+* -DCR_CUSP   :    "                                             *
+* -DGMRES_CUSP: Momentum equation solver selection               *
+* -DBiCG_CUSP :    "                                             *
 *****************************************************************/
 
 #include <stdio.h>
@@ -26,95 +37,174 @@
 
 using namespace std;
 
-#ifdef SINGLE
-  typedef float real;
-#else
+#ifdef SINGLE              // Many major parameters can automatically defined to be
+  typedef float real;      // float by using -DSINGLE during compilcation. Default
+#else                      // bahavior is to use double precision.
   typedef double real;
 #endif
 
-ifstream meshfile;
-ifstream problemFile;
-ofstream outputFile;
-ofstream outputControl;
+
+
+//------------------------------------------------------------------------------
+// Global Variables
+//------------------------------------------------------------------------------
+
+ifstream meshfile;          // Input file with INP extension.
+ifstream problemFile;       // Input file name is read from this ProblemFile.txt file.
+ofstream outputFile;        // Output file with DAT extension.
+ofstream outputControl;     // Used for debugging.
+ofstream outputPostProcess; // Output file for examine results.
 
 string problemNameFile, whichProblem;
-string problemName     = "ProblemName.txt";
-string controlFile     = "Control_Output.txt";
-string inputExtension  = ".inp";
+string problemName      = "ProblemName.txt";
+string controlFile      = "Control_Output.txt";
+string inputExtension   = ".inp";
 string outputExtension;
+string outputExtensionPostProcess;
 string restartExtension = "_restart.dat";
 
-int name, eType, NE, NN, NGP, NEU, Ndof;
-int NCN, NENv, NENp, nonlinearIterMax, solverIterMax, nDATiter;
-double density, viscosity, fx, fy, nonlinearTol, solverTol;
-bool   isRestart;
-int **LtoG, **velNodes, **pressureNodes;
-double **monitorPoints;
-int *monitorNodes;
-double **coord;
-int nBC, nVelNodes, nPressureNodes, nMonitorPoints;
-double *BCtype, **BCstrings;
-double axyFunc, fxyFunc;
-double **GQpoint, *GQweight;
-double **Sp, ***DSp, **Sv, ***DSv;
-double **detJacob, ****gDSp, ****gDSv;
 
-int **GtoL, *rowStartsSmall, *colSmall, **KeKMapSmall, NNZ;
-int *rowStartsDiagonal, *colDiagonal, NNZ_diagonal;
-int ***KeKMap;
+int eType;   // Element type. 3: 3D Hexahedron, 4: 3D Tetrahedron
+int NE;      // Number of elements
+int NN;      // Number of both corner and mid-face nodes, if there are any 
+int NGP;     // Number of GQ points.
+int NEU;     // Number of elemental unknowns, 3*NENv + NENp
+int Ndof;    // Total number of unknowns in the problem, 4*NN
 
-double **Ke_1, **Ke_2, **Ke_3;
-double **Ke_1_add, **Ke_2_add, **Ke_3_add;
-double *uNodal, *vNodal, *wNodal;
-double u0, v0, w0; 
-double *Du0, *Dv0, *Dw0;
-real *F, *u, *v, *w, *delta_p, *p, *velVector;
-real *K_u_diagonal, *K_v_diagonal, *K_w_diagonal, *tempDiagonal;
-real *K_1;
+int NCN;               // Number of corner nodes of the mesh.
+int NENv;              // Number of velocity nodes on an element.
+int NENp;              // Number of pressure nodes on an element.
+int nonlinearIterMax;  // Maximum number of nonlinear iterations.
+int solverIterMax;     // Maximum number of iterations of the iterative solvers.
+int nDATiter;          // Period of saving results.
 
-double **Ke_uv, **Ke_uw;
-double **Ke_vu, **Ke_vw;
-double **Ke_wu, **Ke_wv;
-double **Ke_uv_add, **Ke_uw_add, **Ke_vw_add;
-real *K_uv, *K_uw;
-real *K_vu, *K_vw;
-real *K_wu, *K_wv;
+double density;        // Density of the material.
+double viscosity;      // Viscosity of the material.
+double fx, fy;         // 
+double nonlinearTol;   // Nonlinear iteration tolerance.
+double solverTol;      // Iterative solver tolerance.
 
-double **Cx_elemental, **Cy_elemental, **Cz_elemental; 
-double **CxT_elemental, **CyT_elemental, **CzT_elemental;
-double **Cx_elemental_add, **Cy_elemental_add, **Cz_elemental_add; 
-real *Cx, *Cy, *Cz;
-real *CxT, *CyT, *CzT;
+bool isRestart;        // Switch that defines if solver continues from a previous solution(results)
+                       // or starts from beginning.
+int **LtoG;            // Local to global node mapping. (size:NExNENv)
+int **velNodes;        // Nodes that are defined as velocity boundary.
+int **pressureNodes;   // Nodes that are defined as pressure boundary.
 
-real *val_deltaP, *F_deltaP;
-int *row_deltaP, *col_deltaP;
+double **monitorPoints; // Coordinates of points that are wanted to monitor.
+int *monitorNodes;      // Mesh nodes that are closest to the coordinates of points that are wanted to monitor.
+double **coord;         // Coordinates (x, y, z) of the mesh nodes. (size:NNx3)
+int nBC;                // Number of different boundary conditions.
+int nVelNodes;          // Number of mesh nodes where velocity is specified.
+int nPressureNodes;     // Number of mesh nodes where pressure is specified.
+int nMonitorPoints;     // Number of monitor points.
 
-int iter;
-int phase, STEP, vectorOperationNo;
-double alpha [4];
+double *BCtype;         // Type of boundary condition.
+double **BCstrings;     // Values of boundary condition. 
 
-//Variables for CUDA operations
-int *d_col, *d_row;
-real *d_val, *d_x, *d_r, *d_rTemp;
+double axyFunc, fxyFunc; 
+double **GQpoint, *GQweight; // GQ points and weights.
 
+double **Sp;     // Shape functions for pressure evaluated at GQ points. (size:NENpxNGP)
+double ***DSp;   // Derivatives of shape functions for pressure wrt to ksi, eta & zeta evaluated at GQ points. (size:NENpxNGP)
+double **Sv;     // Shape functions for velocity evaluated at GQ points. (size:NENvxNGP) 
+double ***DSv;   // Derivatives of shape functions for velocity wrt to ksi, eta & zeta evaluated at GQ points. (size:NENvxNGP)
+
+double **detJacob; // Determinant of the Jacobian matrix evaluated at a certain (ksi, eta, zeta)
+double ****gDSp;   // Derivatives of shape functions for pressure wrt x, y & z at GQ points. (size:3xNENvxNGP)
+double ****gDSv;   // Derivatives of shape functions for velocity wrt x, y & z at GQ points. (size:3xNENvxNGP)
+
+int **GtoL;           // Stores information of nodes present in which elements. (size:NNx?)
+int *rowStartsSmall;  // Rows of the nonzeros of the stiffness matrix. (size:NNZ) 
+int *colSmall;        // Columns of the nonzeros of the stiffness matrix. (size:NNZ)
+int **KeKMapSmall;    // Store the location of each entry of elemental Ke in sparsely stored global
+                      // stiffness matrix. (size:NENvxNENv)
+int ***KeKMap;        // Store the location of each entry of elemental Ke in sparsely stored global
+                      // stiffness matrix for all elements. (size: NExNENvxNENv)           
+int NNZ;              // Number of nonzero entries in global stiffness matrix.
+
+int *rowStartsDiagonal; // Rows of the nonzeros of the diagonal matrix. (size:NNZ) 
+int *colDiagonal;       // Columns of the nonzeros of the diagonal matrix. (size:NNZ)
+int NNZ_diagonal;       // Number of nonzero entries in diagonal matrix.
+
+double **Ke_1, **Ke_2, **Ke_3;              // Elemental stiffness matrices. (size:NN)
+                                            // Ke_1 is related with K_u_diagonal.
+                                            // Ke_2 is related with K_v_diagonal.
+                                            // Ke_3 is related with K_w_diagonal.
+double **Ke_1_add, **Ke_2_add, **Ke_3_add;  // For constructing elemental stiffness matrices. (size:NENvxNENv)
+double *uNodal, *vNodal, *wNodal;           // Nodal unknowns for an element. (size:NENv)
+double u0, v0, w0;                          // Unknowns at GQ points. 
+double *Du0, *Dv0, *Dw0;                    // Derivatives of the unknowns at GQ points. (size:NENv)
+
+real *F;                          // Global force vectors for momentum equations. (size:NN)
+real *u, *v, *w;                  // Global unknown vectors for velocities. (size:NN)
+real *u_temp, *v_temp, *w_temp;   // Temporary unknown vectors for velocities. (size:NN)
+real *delta_p, *p;                // Global unknown vectors for pressures. (size:NN)
+
+real *K_u_diagonal, *K_v_diagonal, *K_w_diagonal; // Diagonal members of the stiffness matrices (K_uu, K_vv, K_ww). (size:NN)
+real *tempDiagonal;                               // Temporary array for constructing K_u_diagonal etc. (size:NN)
+real *K_1;                                        // Global stiffness matrix
+                                                  // K_1 will be used for K_uu, K_vv, K_ww (size:NNZ)
+
+double **Ke_uv, **Ke_uw;                          // Elemental stiffness matrices for constructing. (size:NENvxNENv)
+double **Ke_vu, **Ke_vw;                          // K_uv, K_uw, K_vu, K_vw, K_wu, K_wv
+double **Ke_wu, **Ke_wv;                          // 
+double **Ke_uv_add, **Ke_uw_add, **Ke_vw_add;     // For constructing elemental stiffness matrices. (size:NENvxNENv)
+
+real *K_uv, *K_uw;                                // Global stiffness matrices for
+real *K_vu, *K_vw;                                // K_uv, K_uw, K_vu, K_vw, K_wu, K_wv (size:NNZ)
+real *K_wu, *K_wv;                                // 
+
+double **Cx_elemental, **Cy_elemental, **Cz_elemental;              // Elemental stiffness matrices for constructing Cx, Cy, Cz. (size:NENvxNENp)
+double **CxT_elemental, **CyT_elemental, **CzT_elemental;           // Elemental stiffness matrices for constructing CxT, CyT, CzT. (size:NENvxNENp)
+double **Cx_elemental_add, **Cy_elemental_add, **Cz_elemental_add;  // For constructing elemental stiffness matrices. (size:NENvxNENp)
+
+real *Cx, *Cy, *Cz;        // Pressure gradient operators. (size:NNZ)
+real *CxT, *CyT, *CzT;     // Velocity divergence operators, transposes of Cx, Cy and Cz. (size:NNZ)
+
+real *val_deltaP;   // Values of the nonzeros of the pressure correction equations LHS.
+real *F_deltaP;     // Stores the values of pressure correction equations RHS.
+int *row_deltaP;    // Rows of the nonzeros of the pressure correction equations LHS.
+int *col_deltaP;    // Columns of the nonzeros of the pressure correction equations LHS.
+
+int iter;                // Counts number of iterations
+int phase;               // Defines on which dimension calculations takes place 
+int STEP;                // Shows on which step calculations takes place
+                         // On reference paper(Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian)
+                         // nonlinear iterations are divied to three steps 
+int vectorOperationNo;   // Defines which vector operations will be done 
+double alpha[4];         // Relaxation factors
+                         // alpha[0]: Relaxation factor for u velocities
+                         // alpha[1]: Relaxation factor for v velocities
+                         // alpha[2]: Relaxation factor for w velocities
+                         // alpha[3]: Relaxation factor for pressures
+
+// Variables for CUDA operations
+int *d_col, *d_row;                  // Variables are needed for GPU calculations(vector operations).
+real *d_val, *d_x, *d_r, *d_rTemp;   // Variables are needed for GPU calculations(vector operations).
+
+
+
+
+//------------------------------------------------------------------------------
+// Functions
+//------------------------------------------------------------------------------
 void readInput();
 void readRestartFile();
 void gaussQuad();
 void calcShape();
 void calcJacobian();
 void initGlobalSysVariables();
+void calcKeKMap();
 void calcPressureGradientOp();
-void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental,
-                                        double **CxT_elemental, double **CyT_elemental, double **CzT_elemental);
-void assemble_pressureGradientOp_map(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental,
-                                            double **CxT_elemental, double **CyT_elemental, double **CzT_elemental);
+void assemble_pressureGradientOp(int e);
+void assemble_pressureGradientOp_map(int e);
 void calcFixedK();
-void assemble_fixedK(int e, double **Ke_uv, double **Ke_uw, double **Ke_vu, double **Ke_vw, double **Ke_wu, double **Ke_wv); 
-void assemble_fixedK_map(int e, double **Ke_uv, double **Ke_uw, double **Ke_vu, double **Ke_vw, double **Ke_wu, double **Ke_wv); 
+void assemble_fixedK(int e); 
+void assemble_fixedK_map(int e); 
 void calcGlobalSys_p();
 void calcGlobalSys_mom();
-void assemble_mom(int e, double **Ke_1);
-void assemble_mom_map(int e, double **Ke_1);
+void assemble_mom(int e);
+void assemble_mom_map(int e);
 void applyBC();
 void applyBC_p();
 void applyBC_deltaP();
@@ -125,7 +215,7 @@ void writeTecplotFile();
 void compressedSparseRowStorage();
 double getHighResolutionTime();
 
-//pressure correction equation solvers
+// Pressure correction equation solvers
 #ifdef CG_CUDA
    extern void CUSP_pC_CUDA_CG();
 #endif
@@ -139,7 +229,7 @@ double getHighResolutionTime();
    extern void CUSP_pC_CUSP_CR();
 #endif
 
-//momentum equation solvers
+// Momentum equation solvers
 #ifdef GMRES_CUSP
    extern void CUSP_GMRES();
 #endif
@@ -147,66 +237,81 @@ double getHighResolutionTime();
    extern void CUSP_BiCG();
 #endif
 
+
+
+
+
 //------------------------------------------------------------------------------
 int main()
 //------------------------------------------------------------------------------
 {
    cout << "\n********************************************************";
    cout << "\n*   Navier-Stokes 3D - Part of CFD with CUDA project   *";
-   cout << "\n*       http://code.google.com/p/cfd-with-cuda         *";
+   cout << "\n*                  Segregated Solver                   *";
+   cout << "\n*        http://code.google.com/p/cfd-with-cuda        *";
    cout << "\n********************************************************\n\n";
 
    cout << "The program is started." << endl ;
    
-   double Start, End, Start1, End1;
+   double Start, End, Start1, End1;   // Used for run time measurement.
 
    Start1 = getHighResolutionTime();   
 
    Start = getHighResolutionTime();
-   readInput();             
+   readInput();                       // Read the input file.
    End = getHighResolutionTime();
    printf("Time for Input    = %-.4g seconds.\n", End - Start);
    
    Start = getHighResolutionTime();
-   compressedSparseRowStorage(); 
+   compressedSparseRowStorage();      // Setup variables for CSR storage.
    End = getHighResolutionTime();
    printf("Time for CSR      = %-.4g seconds.\n", End - Start);
 
    Start = getHighResolutionTime();   
-   gaussQuad();
+   gaussQuad();                       // Setup variables for Gauss Quadrature integration.
    End = getHighResolutionTime();
    printf("Time for GQ       = %-.4g seconds.\n", End - Start);
 
    Start = getHighResolutionTime();
-   calcShape();
+   calcShape();                       // Calculate shape functions at GQ points.
    End = getHighResolutionTime();
    printf("Time for Shape    = %-.4g seconds.\n", End - Start);
    
    Start = getHighResolutionTime();
-   calcJacobian();
+   calcJacobian();                    // Calculate element Jacobians and shape function derivatives at GQ points.
    End = getHighResolutionTime();
    printf("Time for Jacobian = %-.4g seconds.\n", End - Start);
 
+   Start = getHighResolutionTime();   
+   calcKeKMap();                      // Calculate elemental to global stiffness matrix's mapping data for all elements. 
+   End = getHighResolutionTime();
+   printf("Time for KeKMap   = %-.4g seconds.\n", End - Start);
+   
    Start = getHighResolutionTime();
-   initGlobalSysVariables();
+   initGlobalSysVariables();          // Initialize global system variables before solution.
    End = getHighResolutionTime();
    printf("Time for InitVar  = %-.4g seconds.\n", End - Start);
    
-   Start = getHighResolutionTime(); 
-   calcPressureGradientOp();   
+   Start = getHighResolutionTime();
+   calcPressureGradientOp();          // Calculate presurre gradient operators (Cx, Cy, Cz, CxT, CyT, CzT)
    End = getHighResolutionTime();
    printf("Time for C vecs   = %-.4g seconds.\n", End - Start);
    
    Start = getHighResolutionTime();
-   calcFixedK();
+   calcFixedK();                      // Calculates K_uv, K_uw, K_vu, K_vw, K_wu, K_wv
    End = getHighResolutionTime();
    printf("Time for K vecs   = %-.4g seconds.\n", End - Start);   
    
    Start = getHighResolutionTime();
-   solve();
+   solve();                           // Do nonlinear iterations 
    End = getHighResolutionTime();
    printf("Time for Iter's   = %-.4g seconds.\n", End - Start);   
 
+   Start = getHighResolutionTime();
+   postProcess();                     // Write calculated unknows to a file. 
+   End = getHighResolutionTime();
+   printf("Time for Post Pr. = %-.4g seconds.\n", End - Start); 
+   
    End1 = getHighResolutionTime();
 
    printf("Total Time        = %-.4g seconds.\n", End1 - Start1);
@@ -224,64 +329,85 @@ int main()
 void readInput()
 //------------------------------------------------------------------------------
 {
-
+   // Read the input file with INP extension.
+   
    string dummy, dummy2, dummy4, dummy5;
    int dummy3, i, j;
 
-   problemFile.open(problemName.c_str(), ios::in);   // Read problem name
-   problemFile >> whichProblem;                                  
+   problemFile.open(problemName.c_str(), ios::in);   // This is file called problemName.txt
+   problemFile >> whichProblem;                      // This is used to construct input file's name.
    problemFile.close();
    
    meshfile.open((whichProblem + inputExtension).c_str(), ios::in);
      
    meshfile.ignore(256, '\n'); // Read and ignore the line
    meshfile.ignore(256, '\n'); // Read and ignore the line
+   
    meshfile >> dummy >> dummy2 >> eType;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> NE;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> NCN;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> NN;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> NENv;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> NENp;   
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> NGP;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> nonlinearIterMax;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> nonlinearTol;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> solverIterMax;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> solverTol;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> alpha[0] >>  alpha[1] >> alpha[2] >> alpha[3];
    meshfile.ignore(256, '\n'); // Ignore the rest of the line  
+   
    meshfile >> dummy >> dummy2 >> nDATiter;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line   
+   
    meshfile >> dummy >> dummy2 >> isRestart;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line   
+   
    meshfile >> dummy >> dummy2 >> density;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> viscosity;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> fx;
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
+   
    meshfile >> dummy >> dummy2 >> fy;
+   
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile.ignore(256, '\n'); // Read and ignore the line
    meshfile.ignore(256, '\n'); // Read and ignore the line  
    
-   NEU = 3*NENv + NENp;
-   Ndof = 3*NN + NCN;
-   
+   NEU = 3*NENv + NENp;    // Number of elemental unknowns.
+   Ndof = 3*NN + NCN;      // Total number of unknowns in the problem (disregarding the BCs).
+                           // Assumes that velocities and pressures are stored at all mesh nodes.
+
    // Read node coordinates
    coord = new double*[NN];
    
-   if (eType == 2 || eType == 1) {
+   if (eType == 2 || eType == 1) {   // These are 2D element types. Not used in this 3D code
       for (i = 0; i < NN; i++) {
          coord[i] = new double[2];
       }
@@ -290,7 +416,7 @@ void readInput()
          meshfile >> dummy3 >> coord[i][0] >> coord[i][1] ;
          meshfile.ignore(256, '\n'); // Ignore the rest of the line    
       }  
-   } else {
+   } else {                          // 3D elements
       for (i = 0; i < NN; i++) {
          coord[i] = new double[3];
       }
@@ -303,7 +429,8 @@ void readInput()
    
    meshfile.ignore(256, '\n'); // Read and ignore the line
    meshfile.ignore(256, '\n'); // Read and ignore the line 
-    
+
+
    // Read element connectivity, i.e. LtoG
    LtoG = new int*[NE];
 
@@ -321,6 +448,7 @@ void readInput()
 
    meshfile.ignore(256, '\n'); // Read and ignore the line
    meshfile.ignore(256, '\n'); // Read and ignore the line 
+
 
    // Read number of different BC types and details of each BC
    meshfile >> dummy >> dummy2 >> nBC;
@@ -342,8 +470,10 @@ void readInput()
     
    meshfile.ignore(256, '\n'); // Read and ignore the line 
    meshfile >> dummy >> dummy2 >> nVelNodes;
+
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile >> dummy >> dummy2 >> nPressureNodes;
+
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
@@ -380,8 +510,8 @@ void readInput()
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
    meshfile.ignore(256, '\n'); // Ignore the rest of the line
 
+
    // Read monitor point part and find the nodes that are closest to the monitored coordinates. 
-   
    double distance, minDistance;
    
    if (nMonitorPoints!=0){
@@ -424,19 +554,23 @@ void compressedSparseRowStorage()
 
    GtoL = new int*[NN];         // Stores the elements that are connected to each node.
    noOfColGtoL = 50;            // It is assumed that max 50 elements are connected to a node.
-   GtoLCounter = new int[NN];
+   GtoLCounter = new int[NN];   // Counts the elements that are connected to each node.
    
    for (i=0; i<NN; i++) {     
       GtoL[i] = new int[noOfColGtoL];   
    }
 
+   // Initialize GtoL and GtoLcounter to -1 and 0.
+   // Because we don't know a node presents in how many elements, we fill GtoL with "-1".
+   // After filling GtoL with element numbers, "-1"s will be stop criteria.
    for(i=0; i<NN; i++) {
       for(j=0; j<noOfColGtoL; j++) {
-         GtoL[i][j] = -1;      // For the nodes that didn't connect 4 nodes.  TODO: Not clear.
+         GtoL[i][j] = -1;
       }
       GtoLCounter[i] = 0;
    }
    
+   // Determine GtoL and GtoLcounter.
    for (i=0; i<NE; i++) {
       for(j=0; j<NENv; j++) {
          GtoL[ LtoG[i][j] ][ GtoLCounter[LtoG[i][j]] ] = i;
@@ -445,6 +579,7 @@ void compressedSparseRowStorage()
    }
    
    delete[] GtoLCounter;
+
 
    // Find size of the col vector. Create rowStarts & rowStartsSmall
                                     // Stores the number of nonzeros at each rows of [K]
@@ -470,7 +605,7 @@ void compressedSparseRowStorage()
                for(x=0; x<NENp; x++) {
                   check = 1;         // For checking if column overlap occurs or not
                   for(y=0; y<NNZ; y++) {
-                     if(checkCol[y] == (LtoG[valGtoL][x])) {   // This column was created
+                     if(checkCol[y] == (LtoG[valGtoL][x])) {   // This column was already created
                         check = 0;
                      }
                   }
@@ -490,7 +625,7 @@ void compressedSparseRowStorage()
 
    // Create col & colSmall
 
-   colSmall = new int[rowStartsSmall[NN]];  // col for a part of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp)) 
+   colSmall = new int[rowStartsSmall[NN]];  // col for a part of K(only for "u" velocity in another words 1/16 of the K(if NENv==NENp))  TODO: 1/16 hexahedral elemanlar icin sadece.
 
    for(i=0; i<NN; i++) {
       NNZ = 0;
@@ -530,12 +665,13 @@ void compressedSparseRowStorage()
       }      
    }  
 
-   NNZ = rowStartsSmall[NN];  
-   
+   NNZ = rowStartsSmall[NN];
+ 
    // Create CSR vectors for diagonal matrix
+   // TODO: will be unnecessary after rearranging the matrix-vector operations at GPU 
    rowStartsDiagonal = new int[NN+1];
    for(i=0; i<=NN; i++) {
-      rowStartsDiagonal[i] = i;
+      rowStartsDiagonal[i] = i;     
    }
    
    colDiagonal = new int[rowStartsDiagonal[NN]];
@@ -919,44 +1055,100 @@ void calcJacobian()
 
 
 //------------------------------------------------------------------------------
+void calcKeKMap()
+//------------------------------------------------------------------------------
+{
+   // This function calculates the KeKMap.
+   // KeKMap keeps elemental to global stiffness matrix's mapping data for all elements.
+
+
+   //-----------Ke to K map selection----------------------------
+   //KeKMap : costs memory([NE][NENv][NENv]*4byte), runs faster. (default)
+   //KeKMapSmall : negligible memory, runs slower. Steps to use;
+   //               (1) Comment out KeKMapUSE parts
+   //               (2) Uncomment KeKMapSmallUSE parts
+   //------------------------------------------------------------   
+   
+   //-----KeKMapUSE-----
+   int *eLtoG, loc, colCounter, k, e, i, j;   
+   
+   KeKMap = new int**[NE];                //Keeps elemental to global stiffness matrix's mapping data
+   for(e=0; e<NE; e++) {                  //It costs some memory([NE][NENv][NENv]*4byte) but makes assembly function runs faster.
+      KeKMap[e] = new int*[NENv];
+      for(j=0; j<NENv; j++) {
+         KeKMap[e][j] = new int[NENv];
+      }
+   }
+   
+   eLtoG = new int[NENv];           // elemental LtoG data    
+   
+   for(e=0; e<NE; e++) {
+
+      for(k=0; k<NENv; k++) {
+         eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
+      } 
+
+      for(i=0; i<NENv; i++) {
+         for(j=0; j<NENv; j++) {
+            colCounter=0;
+            for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
+               if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
+                  KeKMap[e][i][j] = colCounter; 
+                  break;
+               }
+               colCounter++;
+            }
+         }
+      }   
+   }   // End of element loop 
+   
+   delete[] eLtoG;
+   //-----KeKMapUSE-----
+
+} // End of function calcKeKMap()
+
+
+
+
+//------------------------------------------------------------------------------
 void initGlobalSysVariables()
 //------------------------------------------------------------------------------
 {
-   // Allocate memory for stiffness matrices and force vectors
+   // Allocate memory for stiffness matrices and force vectors.
    
    int i;
    
-   K_1 = new real[rowStartsSmall[NN]];   //K_1 will be used for K_uu, K_vv, K_ww 
+   K_1 = new real[NNZ];   // K_1 will be used for K_uu, K_vv, K_ww
    
-   K_uv = new real[rowStartsSmall[NN]];   
-   K_uw = new real[rowStartsSmall[NN]];   
-   K_vu = new real[rowStartsSmall[NN]];   
-   K_vw = new real[rowStartsSmall[NN]];   
-   K_wu = new real[rowStartsSmall[NN]]; 
-   K_wv = new real[rowStartsSmall[NN]];   
+   K_uv = new real[NNZ];
+   K_uw = new real[NNZ];
+   K_vu = new real[NNZ];
+   K_vw = new real[NNZ];
+   K_wu = new real[NNZ];
+   K_wv = new real[NNZ];
    
-   Cx = new real[rowStartsSmall[NN]];  
-   Cy = new real[rowStartsSmall[NN]]; 
-   Cz = new real[rowStartsSmall[NN]];   
+   Cx = new real[NNZ];
+   Cy = new real[NNZ];
+   Cz = new real[NNZ];
 
-   CxT = new real[rowStartsSmall[NN]];   //transpose of Cx    
-   CyT = new real[rowStartsSmall[NN]];   //transpose of Cy 
-   CzT = new real[rowStartsSmall[NN]];   //transpose of Cz     
-   
-   for (i=0; i<rowStartsSmall[NN]; i++) {
-      K_1[i] = 0.0; 
-      K_uv[i] = 0.0; 
-      K_uw[i] = 0.0; 
-      K_vu[i] = 0.0; 
-      K_vw[i] = 0.0; 
-      K_wu[i] = 0.0; 
+   CxT = new real[NNZ];   // Transpose of Cx
+   CyT = new real[NNZ];   // Transpose of Cy
+   CzT = new real[NNZ];   // Transpose of Cz
+
+   for (i=0; i<NNZ; i++) {
+      K_1[i] = 0.0;
+      K_uv[i] = 0.0;
+      K_uw[i] = 0.0;
+      K_vu[i] = 0.0;
+      K_vw[i] = 0.0;
+      K_wu[i] = 0.0;
       K_wv[i] = 0.0;
       Cx[i] = 0.0;
       Cy[i] = 0.0;
       Cz[i] = 0.0;
       CxT[i] = 0.0;
       CyT[i] = 0.0;
-      CzT[i] = 0.0;   
+      CzT[i] = 0.0;
    }
    
    Cx_elemental = new double*[NENv];
@@ -1038,9 +1230,11 @@ void initGlobalSysVariables()
    u = new real[NN];
    v = new real[NN];
    w = new real[NN];
+   u_temp = new real[NN];
+   v_temp = new real[NN];
+   w_temp = new real[NN];   
    p = new real[NN];  
    delta_p = new real[NN];
-   velVector = new real[NN];
 
    K_u_diagonal = new real[NN];
    K_v_diagonal = new real[NN];
@@ -1052,64 +1246,23 @@ void initGlobalSysVariables()
       u[i] = 0.0;
       v[i] = 0.0;
       w[i] = 0.0;
+      u_temp[i] = 0.0;
+      v_temp[i] = 0.0;
+      w_temp[i] = 0.0;      
       p[i] = 0.0;
       delta_p[i] = 0.0;
-      velVector[i] = 0.0; 
       K_u_diagonal[i] = 0.0;
       K_v_diagonal[i] = 0.0;
       K_w_diagonal[i] = 0.0;   
       tempDiagonal[i] = 0.0;      
    } 
    
-   F = new real[NN];   //RHS vector for momentum equations ([4e],[4f],[4g])
+   F = new real[NN];   // RHS vector for momentum equations
+                       // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])  
 
    for (i=0; i<NN; i++) {
       F[i] = 0;
    }
-
-   
-   //-----------Ke to K map selection----------------------------
-   //KeKMap : costs memory([NE][NENv][NENv]*4byte), runs faster. (default)
-   //KeKMapSmall : negligible memory, runs slower. Steps to use;
-   //               (1) Comment out KeKMapUSE parts
-   //               (2) Uncomment KeKMapSmallUSE parts
-   //------------------------------------------------------------   
-   
-   //-----KeKMapUSE-----
-   int *eLtoG, loc, colCounter, k, e, j;   
-   
-   KeKMap = new int**[NE];                //Keeps elemental to global stiffness matrix's mapping data
-   for(e=0; e<NE; e++) {                  //It costs some memory([NE][NENv][NENv]*4byte) but makes assembly function runs faster.
-      KeKMap[e] = new int*[NENv];
-      for(j=0; j<NENv; j++) {
-         KeKMap[e][j] = new int[NENv];
-      }
-   }
-   
-   eLtoG = new int[NENv];           // elemental LtoG data    
-   
-   for(e=0; e<NE; e++) {
-
-      for(k=0; k<NENv; k++) {
-         eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
-      } 
-
-      for(i=0; i<NENv; i++) {
-         for(j=0; j<NENv; j++) {
-            colCounter=0;
-            for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
-               if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
-                  KeKMap[e][i][j] = colCounter; 
-                  break;
-               }
-               colCounter++;
-            }
-         }
-      }   
-   }   // End of element loop 
-   
-   delete[] eLtoG;
-   //-----KeKMapUSE-----
    
    
    if(isRestart) {
@@ -1124,8 +1277,8 @@ void initGlobalSysVariables()
 void calcFixedK()
 //------------------------------------------------------------------------------
 {
-   // Calculates Cx_elemental, Cy_elemental, Cz_elemental one by one for each element and assembles them into
-   // the global Cx, Cy, Cz and CxT, CyT, CzT.
+   // Calculates Cx_elemental, Cy_elemental, Cz_elemental one by one for each
+   // element and assembles them into the global Cx, Cy, Cz and CxT, CyT, CzT.
    int e, i, j, k, m, n, node;   
    
    for (e = 0; e<NE; e++) {
@@ -1179,11 +1332,11 @@ void calcFixedK()
       }
       
       //-----KeKMapSmallUSE-----
-      //assemble_fixedK(e, Ke_uv, Ke_uw, Ke_vu, Ke_vw, Ke_wu, Ke_wv);
+      //assemble_fixedK(e);
       //-----KeKMapSmallUSE-----      
       
       //-----KeKMapUSE-----
-      assemble_fixedK_map(e, Ke_uv, Ke_uw, Ke_vu, Ke_vw, Ke_wu, Ke_wv); 
+      assemble_fixedK_map(e); 
       //-----KeKMapUSE-----
    }   // End element loop
    
@@ -1193,7 +1346,7 @@ void calcFixedK()
 
 
 //------------------------------------------------------------------------------
-void assemble_fixedK(int e, double **Ke_uv, double **Ke_uw, double **Ke_vu, double **Ke_vw, double **Ke_wu, double **Ke_wv)
+void assemble_fixedK(int e)
 //------------------------------------------------------------------------------
 {
    // Inserts Ke_uv, Ke_uw, Ke_vu, Ke_vw, Ke_wu, Ke_wv into proper locations of
@@ -1255,7 +1408,7 @@ void assemble_fixedK(int e, double **Ke_uv, double **Ke_uw, double **Ke_vu, doub
 
 
 //------------------------------------------------------------------------------
-void assemble_fixedK_map(int e, double **Ke_uv, double **Ke_uw, double **Ke_vu, double **Ke_vw, double **Ke_wu, double **Ke_wv)
+void assemble_fixedK_map(int e)
 //------------------------------------------------------------------------------
 {
    // Inserts Ke_uv, Ke_uw, Ke_vu, Ke_vw, Ke_wu, Ke_wv into proper locations of
@@ -1283,10 +1436,10 @@ void assemble_fixedK_map(int e, double **Ke_uv, double **Ke_uw, double **Ke_vu, 
 void calcPressureGradientOp()
 //------------------------------------------------------------------------------
 {
-   // Calculates Cx_elemental, Cy_elemental, Cz_elemental one by one for each element and assembles them into
-   // the global Cx, Cy, Cz and CxT, CyT, CzT.
-   int e, i, j, k, m, n, node;   
-   
+   // Calculates Cx_elemental, Cy_elemental, Cz_elemental one by one for each
+   // element and assembles them into the global Cx, Cy, Cz and CxT, CyT, CzT.
+   int e, i, j, k, m, n, node;
+  
    for (e = 0; e<NE; e++) {
       // Intitialize Ke and Fe to zero.
 
@@ -1294,12 +1447,12 @@ void calcPressureGradientOp()
          for (j=0; j<NENp; j++) {
             Cx_elemental[i][j] = 0;
             Cy_elemental[i][j] = 0;
-            Cz_elemental[i][j] = 0;       
+            Cz_elemental[i][j] = 0;
             CxT_elemental[i][j] = 0;
             CyT_elemental[i][j] = 0;
-            CzT_elemental[i][j] = 0;                
-         }      
-      }  
+            CzT_elemental[i][j] = 0;
+         }
+      }
       
       for (k = 0; k<NGP; k++) {   // Gauss quadrature loop
          
@@ -1308,41 +1461,41 @@ void calcPressureGradientOp()
                Cx_elemental_add[i][j] = 0;
                Cy_elemental_add[i][j] = 0;
                Cz_elemental_add[i][j] = 0;
-            }         
+            }
          }
 
          for (i=0; i<NENv; i++) {
             for (j=0; j<NENp; j++) {
                Cx_elemental_add[i][j] = Cx_elemental_add[i][j] + gDSv[e][0][i][k] * Sp[j][k];
                Cy_elemental_add[i][j] = Cy_elemental_add[i][j] + gDSv[e][1][i][k] * Sp[j][k];
-               Cz_elemental_add[i][j] = Cz_elemental_add[i][j] + gDSv[e][2][i][k] * Sp[j][k];               
-            }         
+               Cz_elemental_add[i][j] = Cz_elemental_add[i][j] + gDSv[e][2][i][k] * Sp[j][k];
+            }
          }
          
          for (i=0; i<NENv; i++) {
-            for (j=0; j<NENp; j++) {               
+            for (j=0; j<NENp; j++) {
                Cx_elemental[i][j] += Cx_elemental_add[i][j] * detJacob[e][k] * GQweight[k];
                Cy_elemental[i][j] += Cy_elemental_add[i][j] * detJacob[e][k] * GQweight[k];
-               Cz_elemental[i][j] += Cz_elemental_add[i][j] * detJacob[e][k] * GQweight[k];               
-            }    
+               Cz_elemental[i][j] += Cz_elemental_add[i][j] * detJacob[e][k] * GQweight[k];
+            }
          }
 
       }   // End GQ loop
       
       for (i=0; i<NENv; i++) {
          for (j=0; j<NENp; j++) {
-            CxT_elemental[j][i] = Cx_elemental[i][j] ;
-            CyT_elemental[j][i] = Cy_elemental[i][j] ;
-            CzT_elemental[j][i] = Cz_elemental[i][j] ;
+            CxT_elemental[j][i] = Cx_elemental[i][j];
+            CyT_elemental[j][i] = Cy_elemental[i][j];
+            CzT_elemental[j][i] = Cz_elemental[i][j];
          }
       }
       
       //-----KeKMapSmallUSE-----
-      //assemble_pressureGradientOp(e, Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental);
-      //-----KeKMapSmallUSE-----      
+      //assemble_pressureGradientOp(e);
+      //-----KeKMapSmallUSE-----
       
       //-----KeKMapUSE-----
-      assemble_pressureGradientOp_map(e, Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental);
+      assemble_pressureGradientOp_map(e);
       //-----KeKMapUSE-----
    }   // End element loop
 
@@ -1352,11 +1505,11 @@ void calcPressureGradientOp()
 
 
 //------------------------------------------------------------------------------
-void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental, double **CxT_elemental, double **CyT_elemental, double **CzT_elemental)
+void assemble_pressureGradientOp(int e)
 //------------------------------------------------------------------------------
 {
-   // Inserts Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental into proper locations of
-   // the global Cx, Cy, Cz and CxT, CyT, CzT.
+   // Inserts Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental,
+   // CzT_elemental into proper locations of the global Cx, Cy, Cz and CxT, CyT, CzT.
 
    int i, j;
 
@@ -1365,10 +1518,10 @@ void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_eleme
 
    int *eLtoG, loc, colCounter, k;
     
-   eLtoG = new int[NENv];           // elemental LtoG data
+   eLtoG = new int[NENv];           // Elemental LtoG data
    for(k=0; k<NENv; k++) {
       eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
-   } 
+   }
 
    KeKMapSmall = new int*[NENv];
    for(j=0; j<NENv; j++) {
@@ -1378,9 +1531,9 @@ void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_eleme
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
          colCounter=0;
-         for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
-            if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
-               KeKMapSmall[i][j] = colCounter; 
+         for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x)
+            if(colSmall[loc] == eLtoG[j]) {                                          // Selection process of the KeKMapSmall data from the col vector
+               KeKMapSmall[i][j] = colCounter;
                break;
             }
             colCounter++;
@@ -1392,11 +1545,11 @@ void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_eleme
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
          Cx[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cx_elemental[i][j] ;
-         Cy[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cy_elemental[i][j] ;  
-         Cz[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cz_elemental[i][j] ;  
-         CxT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CxT_elemental[i][j] ;  
-         CyT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CyT_elemental[i][j] ;  
-         CzT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CzT_elemental[i][j] ;         
+         Cy[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cy_elemental[i][j] ;
+         Cz[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += Cz_elemental[i][j] ;
+         CxT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CxT_elemental[i][j] ;
+         CyT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CyT_elemental[i][j] ;
+         CzT[ rowStartsSmall[LtoG[e][i]] + KeKMapSmall[i][j] ] += CzT_elemental[i][j] ;
       }
    }
 
@@ -1414,23 +1567,22 @@ void assemble_pressureGradientOp(int e, double **Cx_elemental, double **Cy_eleme
 
 
 //------------------------------------------------------------------------------
-void assemble_pressureGradientOp_map(int e, double **Cx_elemental, double **Cy_elemental, double **Cz_elemental,
-                                            double **CxT_elemental, double **CyT_elemental, double **CzT_elemental)
+void assemble_pressureGradientOp_map(int e)
 //------------------------------------------------------------------------------
 {
-   // Inserts Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental, CzT_elemental into proper locations of
-   // the global Cx, Cy, Cz and CxT, CyT, CzT.
+   // Inserts Cx_elemental, Cy_elemental, Cz_elemental, CxT_elemental, CyT_elemental,
+   // CzT_elemental into proper locations of the global Cx, Cy, Cz and CxT, CyT, CzT.
    int i, j;
 
    // Creating Cx, Cy, Cz and CxT, CyT, CzT value vectors for sparse storage
    for(i=0; i<NENv; i++) {
       for(j=0; j<NENv; j++) {
          Cx[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cx_elemental[i][j] ;
-         Cy[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cy_elemental[i][j] ;  
-         Cz[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cz_elemental[i][j] ;  
-         CxT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CxT_elemental[i][j] ;  
-         CyT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CyT_elemental[i][j] ;  
-         CzT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CzT_elemental[i][j] ;         
+         Cy[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cy_elemental[i][j] ;
+         Cz[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += Cz_elemental[i][j] ;
+         CxT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CxT_elemental[i][j] ;
+         CyT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CyT_elemental[i][j] ;
+         CzT[ rowStartsSmall[LtoG[e][i]] + KeKMap[e][i][j] ] += CzT_elemental[i][j] ;
       }
    }
 } // End of function assemble_pressureGradientOp_map()
@@ -1580,7 +1732,7 @@ void calcGlobalSys_mom()
       break;
    }
 
-   for(i=0; i<rowStartsSmall[NN]; i++) {
+   for(i=0; i<NNZ; i++) {
       K_1[i] = 0;
    }
    
@@ -1663,11 +1815,11 @@ void calcGlobalSys_mom()
       }      
       
       //-----KeKMapSmallUSE-----  
-      //assemble_mom(e, Ke_1);  // Send Ke_1  for creating K_1
+      //assemble_mom(e);  // Send Ke_1  for creating K_1
       //-----KeKMapSmallUSE-----  
       
       //-----KeKMapUSE-----  
-      assemble_mom_map(e, Ke_1);  // Send Ke_1  for creating K_1
+      assemble_mom_map(e);  // Send Ke_1  for creating K_1
       //-----KeKMapUSE-----       
       
    }   // End element loop
@@ -1678,7 +1830,7 @@ void calcGlobalSys_mom()
 
 
 //------------------------------------------------------------------------------
-void assemble_mom(int e, double **Ke_1)
+void assemble_mom(int e)
 //------------------------------------------------------------------------------
 {
    // Inserts Ke's into proper locations of K's.
@@ -1734,7 +1886,7 @@ void assemble_mom(int e, double **Ke_1)
 
 
 //------------------------------------------------------------------------------
-void assemble_mom_map(int e, double **Ke_1)
+void assemble_mom_map(int e)
 //------------------------------------------------------------------------------
 {
    // Inserts Ke's into proper locations of K's.
@@ -1758,6 +1910,7 @@ void applyBC()
    // For EBCs reduction is not applied. Instead K and F are modified as
    // explained in class, which requires modification of both [K] and {F}.
    // SV values specified for NBCs are added to {F}.
+   // At this function modification for velocity EBC's takes place.    
 
    int i, j, whichBC, node;
    double x, y, z; 
@@ -1772,8 +1925,8 @@ void applyBC()
       z = coord[node][2];
 
       colCounter = 0;
-      for(loc=rowStartsSmall[node]; loc<rowStartsSmall[node+1]; loc++) {   // loc is the location of the col vector(col[x], loc=x)
-         if(colSmall[loc] == node) {                                   // Selection process of the KeKMapSmall data from the col vector.
+      for(loc=rowStartsSmall[node]; loc<rowStartsSmall[node+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x)
+         if(colSmall[loc] == node) {                                      // Selection process of the KeKMapSmall data from the col vector.
             break;
          }
          colCounter++;
@@ -1811,6 +1964,10 @@ void applyBC()
 void applyBC_p()
 //------------------------------------------------------------------------------
 {
+   // For EBCs reduction is not applied. Instead K and F are modified.
+   // Which requires modification of both [K] and {F}.
+   // At this function modification for pressure EBC's takes place. 
+   
    int i, j, whichBC, node ;
    double x, y, z;
    int loc, colCounter;
@@ -1824,8 +1981,8 @@ void applyBC_p()
       z = coord[node][2];
 
       colCounter = 0;
-      for(loc=rowStartsSmall[node]; loc<rowStartsSmall[node+1]; loc++) {   // loc is the location of the col vector(col[x], loc=x)
-         if(colSmall[loc] == node) {                                   // Selection process of the KeKMapSmall data from the col vector.
+      for(loc=rowStartsSmall[node]; loc<rowStartsSmall[node+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x)
+         if(colSmall[loc] == node) {                                      // Selection process of the KeKMapSmall data from the col vector.
             break;
          }
          colCounter++;
@@ -1850,6 +2007,9 @@ void applyBC_p()
 void applyBC_deltaP()
 //------------------------------------------------------------------------------
 {
+   // At this function modification for pressure EBC's takes place for solving 
+   // pressure correction equation.
+   // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a])
    int i, j, whichBC, node ;
    double x, y, z;
    int loc, colCounter;
@@ -1888,6 +2048,11 @@ void applyBC_deltaP()
 void vectorProduct()
 //------------------------------------------------------------------------------
 {
+   // This function makes calculations for some matrix-vector operations on GPU
+   // Some operations at RHS of the mass-adjust velocity equations and
+   // some operations at RHS of the momentum equations.
+   // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c] [4e], [4f])   
+   
    cusparseHandle_t handle = 0;
    cusparseStatus_t status;
    status = cusparseCreate(&handle);
@@ -1903,19 +2068,20 @@ void vectorProduct()
    cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
    cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
    
-   cudaMalloc((void**)&d_col, (rowStartsSmall[NN])*sizeof(int));
+   cudaMalloc((void**)&d_col, (NNZ)*sizeof(int));
    cudaMalloc((void**)&d_row, (NN+1)*sizeof(int));
-   cudaMalloc((void**)&d_val, (rowStartsSmall[NN])*sizeof(real));
+   cudaMalloc((void**)&d_val, (NNZ)*sizeof(real));
    cudaMalloc((void**)&d_x, NN*sizeof(real));  
    cudaMalloc((void**)&d_r, NN*sizeof(real));
 
-   cudaMemcpy(d_col, colSmall, (rowStartsSmall[NN])*sizeof(int), cudaMemcpyHostToDevice);  
+   cudaMemcpy(d_col, colSmall, (NNZ)*sizeof(int), cudaMemcpyHostToDevice);  
    cudaMemcpy(d_row, rowStartsSmall, (NN+1)*sizeof(int), cudaMemcpyHostToDevice);  
    
    switch (vectorOperationNo) {
    
    case 1:
-      // Calculate part of a RHS of the momentum equations ([4e], [4f])
+      // Calculate part of a RHS of the momentum equations
+      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])
       // f_x = - K_uv*v - K_uw*w   
       // f_y = - K_vu*u - K_vw*w
       // f_z = - K_wu*u - K_wv*v
@@ -1923,15 +2089,15 @@ void vectorProduct()
    
       switch (phase) {
          case 0:
-            cudaMemcpy(d_val, K_uv, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);          
+            cudaMemcpy(d_val, K_uv, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);          
             cudaMemcpy(d_x, v, NN*sizeof(real), cudaMemcpyHostToDevice); 
             break;
          case 1:
-            cudaMemcpy(d_val, K_vu, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);             
+            cudaMemcpy(d_val, K_vu, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);             
             cudaMemcpy(d_x, u, NN*sizeof(real), cudaMemcpyHostToDevice);
             break;
          case 2:
-            cudaMemcpy(d_val, K_wu, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);  
+            cudaMemcpy(d_val, K_wu, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);  
             cudaMemcpy(d_x, u, NN*sizeof(real), cudaMemcpyHostToDevice);
             break;
       }
@@ -1944,15 +2110,15 @@ void vectorProduct()
       
       switch (phase) {
          case 0:
-            cudaMemcpy(d_val, K_uw, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);           
+            cudaMemcpy(d_val, K_uw, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);           
             cudaMemcpy(d_x, w, NN*sizeof(real), cudaMemcpyHostToDevice); 
             break;
          case 1:
-            cudaMemcpy(d_val, K_vw, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);  
+            cudaMemcpy(d_val, K_vw, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);  
             cudaMemcpy(d_x, w, NN*sizeof(real), cudaMemcpyHostToDevice);
             break;
          case 2:
-            cudaMemcpy(d_val, K_wv, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice);  
+            cudaMemcpy(d_val, K_wv, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);  
             cudaMemcpy(d_x, v, NN*sizeof(real), cudaMemcpyHostToDevice);
             break;
       }
@@ -1969,17 +2135,18 @@ void vectorProduct()
          cublasDaxpy(NN,1.0,d_r,1,d_rTemp,1);
       #endif   
       
-      // Calculate part of a RHS of the momentum equations ([4e], [4f])
+      // Calculate part of a RHS of the momentum equations
+      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])
       // C_x * p^(i+1), C_y * p^(i+1), C_z * p^(i+1)
       switch (phase) {
          case 0:
-            cudaMemcpy(d_val, Cx, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            cudaMemcpy(d_val, Cx, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
             break;
          case 1:
-            cudaMemcpy(d_val, Cy, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            cudaMemcpy(d_val, Cy, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
             break;
          case 2:
-            cudaMemcpy(d_val, Cz, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            cudaMemcpy(d_val, Cz, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
             break;
       }    
       cudaMemcpy(d_x, p, NN*sizeof(real), cudaMemcpyHostToDevice);
@@ -2001,17 +2168,18 @@ void vectorProduct()
       break;
       
    case 2: 
-      // Calculating part of a RHS of the velocity correction ([4b], [4c])
+      // Calculating part of a RHS of the velocity correction
+      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c])      
       // C_x * deltaP^(i+1/2), C_y * deltaP^(i+1/2), C_z * deltaP^(i+1/2)
       switch (phase) {
          case 0:
-            cudaMemcpy(d_val, Cx, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            cudaMemcpy(d_val, Cx, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
             break;
          case 1:
-            cudaMemcpy(d_val, Cy, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            cudaMemcpy(d_val, Cy, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
             break;
          case 2:
-            cudaMemcpy(d_val, Cz, (rowStartsSmall[NN])*sizeof(real), cudaMemcpyHostToDevice); 
+            cudaMemcpy(d_val, Cz, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
             break;
       }
 
@@ -2041,6 +2209,20 @@ void vectorProduct()
 void solve()
 //------------------------------------------------------------------------------
 {
+   // This function is for nonlinear iterations
+   // Overall structure of the function;
+   // while(iteration number < maximum non-linear iterations)
+   //   calculate STEP 1 (solve SCPE for pressure correction, get delta_p)
+   //   calculate STEP 2 (mass-adjust velocity field and increment pressure, get u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i+1))
+   //   calculate STEP 3 (solve x, y, z momentum equations, get u^(i+1), v^(i+1), w^(i+1))
+   //   check convergence
+   //   print monitor points and other info
+   // end
+   //
+   // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a],)     
+   
+   
+   
    int i, j;
    real temp;
    real change, maxChange;
@@ -2052,7 +2234,10 @@ void solve()
    for (iter = 1; iter < nonlinearIterMax; iter++) {
       Start5 = getHighResolutionTime();   
       cout << endl << "ITERATION NO = " << iter << endl;
-      // (1) solve SCPE for pressure correction delta(p) (equations: [4a])
+      
+      // -----------------------S T A R T   O F   S T E P  1------------------------------------
+      // (1) solve SCPE for pressure correction delta(p)
+      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a], [4b], [4c], [4d], [4e], [4f])   
       Start2 = getHighResolutionTime();      
       Start3 = getHighResolutionTime();     
       
@@ -2106,28 +2291,34 @@ void solve()
       printf("Total time for STEP 1         = %-.4g seconds.\n", End2 - Start2);           
       cout << "STEP 1 is okay: delta(p)^(i+1/2) is calculated." << endl;
       // delta(p)^(i+1/2) is calculated
-      //-----------------------------------------
+      // -------------------------E N D   O F   S T E P  1--------------------------------------
       
-      //-----------------------------------------      
-      // (2) mass-adjust velocity field and increment pressure via (equations: [4b, 4c, 4d])
+      
+      
+      // -----------------------S T A R T   O F   S T E P  2------------------------------------    
+      // (2) mass-adjust velocity field and increment pressure via [4b], [4c], [4d].
+      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c], [4d]) 
+      
       Start2 = getHighResolutionTime();      
-      for (phase=0; phase<3; phase++) {      
+      for (phase=0; phase<3; phase++) {    // Defines on which dimension(x, y, z) calculations takes place
          vectorOperationNo = 2;
-         vectorProduct();
-         switch (phase) {
+         vectorProduct();   // Calculates C_x * deltaP^(i+1/2), C_y * deltaP^(i+1/2), C_z * deltaP^(i+1/2) at GPU according to phase.
+                            // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c])
+                            
+         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
             case 0:
                for (i=0; i<NN; i++) {
-                  u[i] += K_u_diagonal[i]*F[i];
+                  u[i] += K_u_diagonal[i]*F[i];   // Calculate u^(i+1/2)
                }
                break;
             case 1:
                for (i=0; i<NN; i++) {
-                  v[i] += K_v_diagonal[i]*F[i];
+                  v[i] += K_v_diagonal[i]*F[i];   // Calculate v^(i+1/2)
                } 
                break;
             case 2:
                for (i=0; i<NN; i++) {
-                  w[i] += K_w_diagonal[i]*F[i];
+                  w[i] += K_w_diagonal[i]*F[i];   // Calculate w^(i+1/2)
                }  
                break;
          }
@@ -2135,24 +2326,24 @@ void solve()
       }   // End of phase loop
       
       for (i=0; i<NN; i++) {
-         p[i] = p[i] + (1.0-alpha[3]) * delta_p[i];
+         p[i] = p[i] + (1.0-alpha[3]) * delta_p[i];   // Calculate p^(i+1)
       }
       
       End2 = getHighResolutionTime();
       printf("Total time for STEP 2         = %-.4g seconds.\n", End2 - Start2);         
-      cout << "STEP 2 is okay: u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i) are calculated." << endl;        
-      // u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i) are calculated      
-      //-----------------------------------------      
+      cout << "STEP 2 is okay: u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i+1) are calculated." << endl;        
+      // u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i+1) are calculated      
+      // -------------------------E N D   O F   S T E P  2--------------------------------------     
 
-      //----------------------------------------- 
-      // Solve x, y and z momentum equations([4e], [4f]) for u, v, w
-      Start2 = getHighResolutionTime();
-      real *u_temp, *v_temp, *w_temp;
-      u_temp = new real[NN];
-      v_temp = new real[NN];
-      w_temp = new real[NN];
       
-      for (phase=0; phase<3; phase++) {
+      
+      // -----------------------S T A R T   O F   S T E P  3------------------------------------ 
+      // Solve x, y and z momentum equations([4e], [4f]) for u, v, w
+      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])       
+      
+      Start2 = getHighResolutionTime();
+      
+      for (phase=0; phase<3; phase++) {   // Defines on which dimension(x, y, z) calculations takes place
          Start4 = getHighResolutionTime(); 
          Start3 = getHighResolutionTime();  
          calcGlobalSys_mom();
@@ -2180,9 +2371,10 @@ void solve()
 
          Start3 = getHighResolutionTime();           
          vectorOperationNo = 1;
-         vectorProduct();   //calculates f_u + C_x * p (@GPU) or f_v + C_y * p (@GPU) or f_w + C_z * p (@GPU) according to phase
+         vectorProduct();   // Calculates f_u + C_x * p (@GPU) or f_v + C_y * p (@GPU) or f_w + C_z * p (@GPU) according to phase.
+                            // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])     
          End3 = getHighResolutionTime();
-         switch (phase) {
+         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
             case 0:                 
                printf("      Time for f_u + C_x * p (@GPU)       = %-.4g seconds.\n", End3 - Start3); 
                break;
@@ -2194,27 +2386,27 @@ void solve()
                break;
          }
          
-         Start3 = getHighResolutionTime();           
-         switch (phase) {
+         Start3 = getHighResolutionTime();
+         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
             case 0:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[0]/(1.0-alpha[0]))*tempDiagonal[i]*u[i] + F[i];
-               }
+                  F[i]= (alpha[0]/(1.0-alpha[0]))*tempDiagonal[i]*u[i] + F[i]; // Calculates final values for RHS of the x-momentum equation
+               }                                                               // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e])    
                End3 = getHighResolutionTime();
                printf("      Time for K_u(dia) * u + [C_x*p]     = %-.4g seconds.\n", End3 - Start3);                  
                break;
             case 1:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[1]/(1.0-alpha[1]))*tempDiagonal[i]*v[i] + F[i];
-               }  
+                  F[i]= (alpha[1]/(1.0-alpha[1]))*tempDiagonal[i]*v[i] + F[i]; // Calculates final values for RHS of the y-momentum equation
+               }                                                               // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4f])  
                End3 = getHighResolutionTime();
                printf("      Time for K_v(dia) * v + [C_y*p]     = %-.4g seconds.\n", End3 - Start3);   
                break;
             case 2:
                for (i=0; i<NN; i++) {
-                  F[i]= (alpha[2]/(1.0-alpha[2]))*tempDiagonal[i]*w[i] + F[i]; 
-               }   
-               End3 = getHighResolutionTime();
+                  F[i]= (alpha[2]/(1.0-alpha[2]))*tempDiagonal[i]*w[i] + F[i]; // Calculates final values for RHS of the x-momentum equation
+               }                                                               // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4f*])               
+               End3 = getHighResolutionTime();                                 // *Paper derives equations for two dimensions.
                printf("      Time for K_w(dia) * w + [C_z*p]     = %-.4g seconds.\n", End3 - Start3);  
                break;
          }           
@@ -2229,31 +2421,22 @@ void solve()
             CUSP_GMRES(); // Non-sym, positive def
          #endif
          #ifdef BiCG_CUSP
-            CUSP_BiCG();  // Non-sym, positive def
+            CUSP_BiCG();  // Non-sym, positive def 
          #endif
          End3 = getHighResolutionTime();
          printf("\n      Time for momentum eq solver         = %-.4g seconds.", End3 - Start3);     
-         switch (phase) {
+         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
             case 0:
-               for (i=0; i<NN; i++) {
-                  u_temp[i] = velVector[i];
-               }
                cout << endl << "   x-momentum is solved." << endl; 
                End4 = getHighResolutionTime();
                printf("   Total time for solving x-momentum   = %-.4g seconds.\n", End4 - Start4);    
                break;
-            case 1:
-               for (i=0; i<NN; i++) {
-                  v_temp[i] = velVector[i];                
-               }   
+            case 1:  
                cout << endl << "   y-momentum is solved." << endl; 
                End4 = getHighResolutionTime();
                printf("   Total time for solving y-momentum   = %-.4g seconds.\n", End4 - Start4);                   
                break;
-            case 2:
-               for (i=0; i<NN; i++) {
-                  w_temp[i] = velVector[i];                  
-               }   
+            case 2: 
                cout << endl << "   z-momentum is solved." << endl;
                End4 = getHighResolutionTime();
                printf("   Total time for solving z-momentum   = %-.4g seconds.\n", End4 - Start4);                   
@@ -2264,18 +2447,17 @@ void solve()
          u[i] = u_temp[i];
          v[i] = v_temp[i];
          w[i] = w_temp[i];         
-      }
-      
-      delete[] u_temp;
-      delete[] v_temp;
-      delete[] w_temp;      
+      }   
       
       End2 = getHighResolutionTime();
       printf("Total time for STEP 3         = %-.4g seconds.\n", End2 - Start2);         
       cout << "STEP 3 is okay: u^(i+1), v^(i+1), w^(i+1) are calculated." << endl;
       // Momentum equations are solved. u^(i+1), v^(i+1), w^(i+1) are calculated.
-      //-----------------------------------------
+      // -------------------------E N D   O F   S T E P  3--------------------------------------
       
+      
+      
+      // Calculates maximum error/change for checking convergence.
       Start2 = getHighResolutionTime();   
       maxChange = abs(delta_p[0]);
       
@@ -2285,9 +2467,13 @@ void solve()
             maxChange = change;
          }
       }
+      
       End2 = getHighResolutionTime();
+      
       printf("Total time for calc maxChange = %-.4g seconds.\n", End2 - Start2);  
+      
       End5 = getHighResolutionTime();      
+      
       cout <<  " Iter |   Time(sec)   |  Max. Change  |    Mon u    |    Mon v    |    Mon w    |    Mon p  " << endl;
       cout <<  "============================================================================================" << endl;        
       printf("%5d %10.4g %19.5e", iter, End5 - Start5, maxChange);
@@ -2343,23 +2529,22 @@ void solve()
 void postProcess()
 //------------------------------------------------------------------------------
 {
-   // Write the calculated unknowns on the screen.
-   // Actually it is a good idea to write the results to an output file named
-   // ProblemName.out too.
+   // Write the calculated unknowns to a file named ProblemName.out.
+   
+   ostringstream dummy;
+   dummy << iter;
+   outputExtensionPostProcess = "_" + dummy.str() + ".out";
 
-   printf("\nCalculated unknowns are \n\n");
-   printf(" Node      x       y       z         u         v         w       p \n");
-   printf("========================================================================\n");
-   if (eType == 3 || eType == 4) {
-      for (int i = 0; i<NN; i++) { 
-         printf("%-5d %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f %8.4f\n", i, coord[i][0], coord[i][1], coord[i][2], u[i], v[i], w[i], p[i]);
-      }
+   outputPostProcess.open((whichProblem + outputExtensionPostProcess).c_str(), ios::out);   
+
+   int i;
+   // Print the calculated values
+   for (i = 0; i<NN; i++) {
+      outputPostProcess.precision(5);
+      outputPostProcess << scientific  << "\t" << i << " " << u[i] << " " << v[i] << " " << w[i] << " " << p[i] << endl;
    }
-   else { 
-      for (int i = 0; i<NN; i++) { 
-         printf("%-5d %18.8f %18.8f %20.8f\n", i, coord[i][0], coord[i][1], u[i]);
-      }
-   }   
+   
+   outputPostProcess.close();
 
 } // End of function postProcess()
 
@@ -2458,3 +2643,4 @@ double getHighResolutionTime(void)
    double time_seconds = (double) tod.tv_sec + ((double) tod.tv_usec / 1000000.0);
    return time_seconds;
 } // End of function getHighResolutionTime()
+
