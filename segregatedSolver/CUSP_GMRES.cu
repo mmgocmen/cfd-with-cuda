@@ -15,7 +15,10 @@ using namespace std;
 
 extern int *rowStartsSmall, *colSmall, NN, NNZ, solverIterMax;
 extern double solverTol;
-extern real2 *velVector, *K_1, *F;
+extern real2 *K_1, *F;
+extern real2 *u, *v, *w;
+extern real2 *u_temp, *v_temp, *w_temp;
+extern int phase;
 
 //-----------------------------------------------------------------------------
 void CUSP_GMRES()
@@ -46,7 +49,17 @@ void CUSP_GMRES()
    thrust::copy(F,F + NN,b.begin());
 
    // Copy previous solution to device memory
-   thrust::copy(velVector, velVector + NN, x.begin());
+   switch (phase) {
+      case 0:
+         thrust::copy(u, u + NN, x.begin());      
+         break;
+      case 1:                 
+         thrust::copy(v, v + NN, x.begin());     
+         break;
+      case 2:                
+         thrust::copy(w, w + NN, x.begin());     
+         break;
+   }
    
    // Set stopping criteria:
    //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
@@ -63,7 +76,17 @@ void CUSP_GMRES()
    // cout << "Iterative solution is finished." << endl;
 
    // Copy x from device back to u on host 
-   thrust::copy(x.begin(), x.end(), velVector);
+   switch (phase) {
+      case 0:
+         thrust::copy(x.begin(), x.end(), u_temp);
+         break;
+      case 1:                 
+         thrust::copy(x.begin(), x.end(), v_temp);     
+         break;
+      case 2:                
+         thrust::copy(x.begin(), x.end(), w_temp);     
+         break;
+   }    
 
    // report solver results
    if (monitor.converged())
