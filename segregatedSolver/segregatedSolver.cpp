@@ -577,8 +577,6 @@ void compressedSparseRowStorage()
          GtoLCounter[ LtoG[i][j] ] += 1;
       }
    }
-   
-   delete[] GtoLCounter;
 
 
    // Find size of the col vector. Create rowStarts & rowStartsSmall
@@ -591,33 +589,26 @@ void compressedSparseRowStorage()
    for(i=0; i<NN; i++) {
       NNZ = 0;
       
-      if(GtoL[i][0] == -1) {
-         NNZ = 1;
-      } else {
-      
-         for(k=0; k<1000; k++) {    // Prepare checkCol for new row
-            checkCol[k] = -1;
-         }
-      
-         for(j=0; j<noOfColGtoL; j++) {
-            valGtoL = GtoL[i][j];
-            if(valGtoL != -1) {
-               for(x=0; x<NENp; x++) {
-                  check = 1;         // For checking if column overlap occurs or not
-                  for(y=0; y<NNZ; y++) {
-                     if(checkCol[y] == (LtoG[valGtoL][x])) {   // This column was already created
-                        check = 0;
-                     }
-                  }
-                  if (check) {
-                     checkCol[NNZ]=(LtoG[valGtoL][x]);         // Adding new non zero number to checkCol
-                     NNZ++;
-                  }
+      for(k=0; k<1000; k++) {    // Prepare checkCol for new row
+         checkCol[k] = -1;
+      }
+   
+      for(j=0; j<GtoLCounter[i]; j++) {
+         valGtoL = GtoL[i][j];
+         for(x=0; x<NENp; x++) {
+            check = 1;         // For checking if column overlap occurs or not
+            for(y=0; y<NNZ; y++) {
+               if(checkCol[y] == (LtoG[valGtoL][x])) {   // This column was already created
+                  check = 0;
                }
             }
+            if (check) {
+               checkCol[NNZ]=(LtoG[valGtoL][x]);         // Adding new non zero number to checkCol
+               NNZ++;
+            }
          }
-
-      }     
+      }
+         
       rowStartsSmall[i+1] = NNZ + rowStartsSmall[i];
    } // End node loop
    
@@ -629,40 +620,33 @@ void compressedSparseRowStorage()
 
    for(i=0; i<NN; i++) {
       NNZ = 0;
-
-      if(GtoL[i][0] == -1) {
-         colSmall[rowStartsSmall[i]] = i;
-      } else {
       
-         for(j=0; j<noOfColGtoL; j++) {
-            valGtoL = GtoL[i][j];
-            if(valGtoL != -1) {
-               for(x=0; x<NENp; x++) {
-                  check = 1;
-                  for(y=0; y<NNZ; y++) {
-                     if(colSmall[rowStartsSmall[i]+y] == (LtoG[valGtoL][x])) {   // For checking if column overlap occurs or not
-                        check = 0;
-                     }
-                  }
-                  if (check) {
-                     colSmall[rowStartsSmall[i]+NNZ] = (LtoG[valGtoL][x]);
-                     NNZ++;
-                  }
+      for(j=0; j<GtoLCounter[i]; j++) {
+         valGtoL = GtoL[i][j];
+         for(x=0; x<NENp; x++) {
+            check = 1;
+            for(y=0; y<NNZ; y++) {
+               if(colSmall[rowStartsSmall[i]+y] == (LtoG[valGtoL][x])) {   // For checking if column overlap occurs or not
+                  check = 0;
                }
-            }   
+            }
+            if (check) {
+               colSmall[rowStartsSmall[i]+NNZ] = (LtoG[valGtoL][x]);
+               NNZ++;
+            }
          }
-         
-         for(k=1; k<NNZ; k++) {           // Sorting the column vector values
-            for(m=1; m<NNZ; m++) {        // For each row from smaller to bigger
-               if(colSmall[rowStartsSmall[i]+m] < colSmall[rowStartsSmall[i]+m-1]) {
-                  temp = colSmall[rowStartsSmall[i]+m];
-                  colSmall[rowStartsSmall[i]+m] = colSmall[rowStartsSmall[i]+m-1];
-                  colSmall[rowStartsSmall[i]+m-1] = temp;
-               }
-            }   
-         }
-
-      }      
+   
+      }
+      
+      for(k=1; k<NNZ; k++) {           // Sorting the column vector values
+         for(m=1; m<NNZ; m++) {        // For each row from smaller to bigger
+            if(colSmall[rowStartsSmall[i]+m] < colSmall[rowStartsSmall[i]+m-1]) {
+               temp = colSmall[rowStartsSmall[i]+m];
+               colSmall[rowStartsSmall[i]+m] = colSmall[rowStartsSmall[i]+m-1];
+               colSmall[rowStartsSmall[i]+m-1] = temp;
+            }
+         }   
+      }     
    }  
 
    NNZ = rowStartsSmall[NN];
@@ -683,6 +667,8 @@ void compressedSparseRowStorage()
       delete[] GtoL[i];
    }
    delete[] GtoL;
+   
+   delete[] GtoLCounter;
   
 } // End of function compressedSparseRowStorage()
 
@@ -2219,7 +2205,7 @@ void solve()
    //   print monitor points and other info
    // end
    //
-   // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a],)     
+   // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a], [4b], [4c], [4d], [4e], [4f])      
    
    
    
@@ -2237,7 +2223,7 @@ void solve()
       
       // -----------------------S T A R T   O F   S T E P  1------------------------------------
       // (1) solve SCPE for pressure correction delta(p)
-      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a], [4b], [4c], [4d], [4e], [4f])   
+      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a])   
       Start2 = getHighResolutionTime();      
       Start3 = getHighResolutionTime();     
       
