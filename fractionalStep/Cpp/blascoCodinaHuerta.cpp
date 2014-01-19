@@ -1461,11 +1461,13 @@ void findMonitorPoint()
 void setupSparseM()
 //========================================================================
 {
-   // Sets up row and column arrays of the global mass matrix.
+   // Sets up row and column arrays of the global mass matrix. It is only used
+   // in lumped form. Its size is 3NNx3NN. It is consisted of three identical
+   // parts; upper-left, middle and lower right. Data for only upper-left part
+   // will be stored and the others will be generated as required.
 
-   // First work only with the upper left part of the matrix and then extend it
-   // for the middle and lower right parts, which are identical to the upper left
-   // part.
+
+   // Work only with the upper-left part of [M].
 
    // In each row, find the columns with nonzero entries.
 
@@ -3339,8 +3341,7 @@ void step2()
       pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, dummyR2);   // This is (-dt*dt * K * Acc_prev)  part of R2. It is also added to UnpHalf.
-
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseMdOrigInvTimesKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, dummyR2);   // This is (-dt*dt * inv(Md) * K * Acc_prev)  part of R2. It is also added to UnpHalf.
 
    alpha = 1.0;
    beta = 0.0;
@@ -3900,9 +3901,9 @@ void waitForUser(string str)
    // Used for checking memory usage. Prints the input string to the screen and
    // waits for the user to enter a character.
 
-   char dummyUserInput;
-   cout << str;
-   cin >> dummyUserInput;
+   //char dummyUserInput;
+   //cout << str;
+   //cin >> dummyUserInput;
 }
 
 
