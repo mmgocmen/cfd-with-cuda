@@ -249,8 +249,8 @@ void createTecplot();
 void timeLoop();
 void step0();
 void step1(int);
-void step2();
-void step3();
+void step2(int);
+void step3(int);
 void applyBC_initial();
 void applyBC_Step1(int);
 void applyBC_Step2(int);
@@ -2606,7 +2606,7 @@ void timeLoop()
 
          // Calculate pressure of the new time step
          Start = getHighResolutionTime();
-         step2();
+         step2(iter);
          End = getHighResolutionTime();
          printf("step2()               took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
 
@@ -2614,7 +2614,7 @@ void timeLoop()
 
          // Calculate velocity of the new time step
          Start = getHighResolutionTime();
-         step3();
+         step3(iter);
          End = getHighResolutionTime();
          printf("step3()               took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
 
@@ -3308,7 +3308,7 @@ void step1(int iter)
 
 
 //========================================================================
-void step2()
+void step2(int iter)
 //========================================================================
 {
    // Executes step 2 of the method to determine pressure of the new time step.
@@ -3324,36 +3324,34 @@ void step2()
    }
 
    char transa, matdescra[6];
-   double alpha = -dt*dt;
-   double beta = 1.0;          // Add the calculated dummyR2 to the previous dummyR2
+   double alpha, beta;
    int m = 3*NN;
    int *pointerE;
    pointerE = new int[m];
 
-   transa = 'n';
-   
    matdescra[0] = 'g';
    matdescra[1] = 'u';
    matdescra[2] = 'n';
    matdescra[3] = 'c';
-   
-   for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
-   };
 
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseMdOrigInvTimesKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, dummyR2);   // This is (-dt*dt * inv(Md) * K * Acc_prev)  part of R2. It is also added to UnpHalf.
+   if (iter > 1) {   // Skip this part for the first iteration because Acc_prev is zero for it.
+      alpha = -dt*dt;
+      beta = 1.0;          // Add the calculated dummyR2 to the previous dummyR2
+
+      transa = 'n';
+
+      for (int i = 0; i < m; i++) {
+         pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
+      };
+
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseMdOrigInvTimesKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, dummyR2);   // This is (-dt*dt * inv(Md) * K * Acc_prev)  part of R2. It is also added to UnpHalf.
+   }
 
    alpha = 1.0;
    beta = 0.0;
-   m = 3*NN;
    int k = NNp;
    transa = 't';    // Multiply using Gt, not G
-   
-   matdescra[0] = 'g';
-   matdescra[1] = 'u';
-   matdescra[2] = 'n';
-   matdescra[3] = 'c';
-   
+      
    for (int i = 0; i < m; i++) {
       pointerE[i] = sparseGrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
    };
@@ -3373,8 +3371,8 @@ void step2()
 
    // Solve for Pdot using Cholesky factorization obtained in step 0.
    // Reference: Timothy Davis' Book, page 136
-   for (int i=0; i<NNp; i++) {
-      Pdot[i] = R2[i];                    // Equate the solution vector the the RHS vector first.
+   for (int i = 0; i < NNp; i++) {
+      Pdot[i] = R2[i];                    // Equate the solution vector to the RHS vector first.
    }
    double *x;
    x = new double[NNp]; //cs_malloc(NNp, sizeof(double));    // Get workspace
@@ -3391,7 +3389,7 @@ void step2()
 
 
    // Calculate Pnp1
-   for (int i=0; i<NNp; i++) {
+   for (int i = 0; i < NNp; i++) {
       Pnp1[i] = Pn[i] + dt * Pdot[i];
    }
    
@@ -3410,7 +3408,7 @@ void step2()
 
 
 //========================================================================
-void step3()
+void step3(int iter)
 //========================================================================
 {
    // Executes step 3 of the method to determine the velocity of the new time step.
@@ -3431,30 +3429,29 @@ void step3()
    matdescra[1] = 'u';
    matdescra[2] = 'n';
    matdescra[3] = 'c';
+
+   if (iter > 1) {   // Skip this part for the first iteration because Acc_prev is zero for it.
    
-   for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
-   };
+      for (int i = 0; i < m; i++) {
+         pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
+      };
 
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, R3);   // This is (-dt * K * Acc_prev)  part of R3.
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, R3);   // This is (-dt * K * Acc_prev)  part of R3.
+   }
+   
+   if (iter > 1) {
+      beta = 1.0;     // Add to the previously calculated R3 if iter > 1.
+   } else {
+      beta = 0.0;     // Directly calculate R3 if iter == 1.
+   }
 
-
-   alpha = -dt;
-   beta = 1.0;     // Add the the previously calculated R3
-   m = 3*NN;
    int k = NNp;
-   transa = 'n';
-   
-   matdescra[0] = 'g';
-   matdescra[1] = 'u';
-   matdescra[2] = 'n';
-   matdescra[3] = 'c';
    
    for (int i = 0; i < m; i++) {
       pointerE[i] = sparseGrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowIndex, pointerE, Pdot, &beta, R3);   // This is (-dt * G * Pdot) part of R3. It is added to the preiously calculated part.
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowIndex, pointerE, Pdot, &beta, R3);   // This is (-dt * G * Pdot) part of R3. It is added to the preiously calculated part if iter > 1.
 
    // CONTROL
    //for (int i=0; i<3*NN; i++) {
@@ -3466,12 +3463,12 @@ void step3()
    applyBC_Step3();
 
    // Calculate Acc vector.
-   for (int i=0; i<3*NN; i++) {
+   for (int i = 0; i < 3*NN; i++) {
       Acc[i] = R3[i] * MdInv[i];
    }
 
    // Calculate Unp
-   for (int i=0; i<3*NN; i++) {
+   for (int i = 0; i < 3*NN; i++) {
       Unp1[i] = UnpHalf[i] + dt * Acc[i];
    }
 
