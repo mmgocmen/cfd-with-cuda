@@ -146,7 +146,7 @@ int *NelemOfPresNodes;     // Number of elements connnected to pressure nodes
 
 
 int sparseM_NNZ;        // Counts nonzero entries in i) a single sub-mass matrix and ii) full Mass matrix.
-double *sparseMvalue;   // Nonzero values of the global mass matrix.
+double *sparseMvalue;   // Nonzero values of the global mass matrix. Actually the values of only the upper-left sub mass matrix are stored.
 int *sparseMcol;        // Nonzero columns of M, K and A matrices.
 int *sparseMrow;        // Nonzero rows of M, K and A matrices.
 int *sparseMrowIndex;   // Row start indices of M, K and A matrices (for CSR storage).
@@ -1565,7 +1565,7 @@ void setupSparseM()
 
    waitForUser("OK3. Enter a character... ");
 
-   sparseMvalue = new double[3 * sparseM_NNZ_onePart];
+   sparseMvalue = new double[sparseM_NNZ_onePart];
    
    waitForUser("OK4. Enter a character... ");
 
@@ -2705,8 +2705,11 @@ void step0()
    double **Me_11, **Ke_11, **Ge_1, **Ge_2, **Ge_3;
    double GQfactor;
 
-   for (int i = 0; i < sparseM_NNZ; i++){
+   for (int i = 0; i < sparseM_NNZ/3; i++){
       sparseMvalue[i] = 0.0;
+   }
+
+   for (int i = 0; i < sparseM_NNZ; i++){
 	   sparseKvalue[i] = 0.0;
    }
 
@@ -2772,8 +2775,8 @@ void step0()
       for (int i = 0; i < NENv; i++) {
          for (int j = 0; j < NENv; j++) {
             sparseMvalue[sparseMapM[e][i][j]]         += Me_11[i][j];   // Assemble upper left sub-matrix of M
-            sparseMvalue[sparseMapM[e][i][j] + nnzM]  += Me_11[i][j];   // Assemble middle sub-matrix of M
-            sparseMvalue[sparseMapM[e][i][j] + nnzM2] += Me_11[i][j];   // Assemble lower right sub-matrix of M
+            //sparseMvalue[sparseMapM[e][i][j] + nnzM]  += Me_11[i][j];   // Assemble middle sub-matrix of M
+            //sparseMvalue[sparseMapM[e][i][j] + nnzM2] += Me_11[i][j];   // Assemble lower right sub-matrix of M
 
             sparseKvalue[sparseMapM[e][i][j]]         += Ke_11[i][j];   // Assemble upper left sub-matrix of K
             sparseKvalue[sparseMapM[e][i][j] + nnzM]  += Ke_11[i][j];   // Assemble middle sub-matrix of K
@@ -2808,7 +2811,7 @@ void step0()
 
 
    //  CONTROL
-//   for (int i = 0; i < sparseM_NNZ; i++){
+//   for (int i = 0; i < sparseM_NNZ/3; i++){
 //      cout << i+1 << "  " << sparseMrow[i]+1 << "  " << sparseMcol[i]+1 << "  " << sparseMvalue[i] << endl;
 //   }
 //   for (int i = 0; i < sparseM_NNZ; i++){
@@ -2819,11 +2822,16 @@ void step0()
 //   }
 
    
-   // Find the diagonalized mass matrix
+   // Find the diagonalized version of the upper-left sub mass matrix.
    int row;
-   for (int i = 0; i < nnzM3; i++) {
+   for (int i = 0; i < sparseM_NNZ/3; i++) {
       row = sparseMrow[i];
       Md[row] += sparseMvalue[i];
+   }
+   // Extend the diagonalized mass matrix for middle and lower-right sub matrices.
+   for (int i = 0; i < NN; i++) {
+      Md[i + NN]   = Md[i];
+      Md[i + 2*NN] = Md[i];
    }
 
    delete[] sparseMvalue;
@@ -2996,94 +3004,6 @@ void step0()
    delete[] MdOrigInv;
    cs_spfree(Z_cs);
 
-   
-
-
-/* CSparse Exercise
-
-   csi *Ai, *Aj;
-   double *Ax;
-
-   Ai = new csi[4];
-   Aj = new csi[4];
-   Ax = new double[10];
-
-   Ai[0] = 0;   Aj[0] = 0;   Ax[0] = 4.5;
-   Ai[1] = 1;   Aj[1] = 0;   Ax[1] = 3.1;
-   Ai[2] = 3;   Aj[2] = 0;   Ax[2] = 3.5;
-   Ai[3] = 1;   Aj[3] = 1;   Ax[3] = 2.9;
-   Ai[4] = 2;   Aj[4] = 1;   Ax[4] = 1.7;
-   Ai[5] = 3;   Aj[5] = 1;   Ax[5] = 0.4;
-   Ai[6] = 0;   Aj[6] = 2;   Ax[6] = 3.2;
-   Ai[7] = 2;   Aj[7] = 2;   Ax[7] = 3.0;
-   Ai[8] = 1;   Aj[8] = 3;   Ax[8] = 0.9;
-   Ai[9] = 3;   Aj[9] = 3;   Ax[9] = 1.0;
-
-   csi m = 4;
-   csi n = 4;
-   csi nzmax = 10;
-   csi values = 1;
-   csi triplet = 1;
- 
-   cs *A_cs;
-   A_cs = cs_spalloc(m, n, nzmax, values, triplet);
-
-   A_cs->i = Ai;
-   A_cs->p = Aj;
-   A_cs->x = Ax;
-   A_cs->nz = 10;
-
-   cs *B_cs;
-   B_cs = cs_compress(A_cs);
-   cs_print(A_cs, 0);
-   cs_print(B_cs, 0);
-
-   //cs_spfree(A_cs);
-   //cs_spfree(B_cs);
-*/
-
-
-/* CUSP Exercise
-
-   int *rowIndices;
-   int *colIndices;
-   float *values;
-
-   int N = 3;
-   int NNZ = 3;
-   rowIndices = new int[N];
-   colIndices = new int[N];
-   values = new float[NNZ];
-
-   // initialize matrix entries on host
-   rowIndices[0] = 0; colIndices[0] = 2; values[0] = 10;
-   rowIndices[1] = 1; colIndices[1] = 0; values[1] = 20;
-   rowIndices[2] = 2; colIndices[2] = 0; values[2] = 30;
-
-  // A now represents the following matrix
-  //    [ 0  0  10]
-  //    [20  0   0]
-  //    [30  0   0]
-
-  cusp::coo_matrix<int,float,cusp::host_memory> A(N,N,NNZ);
-  thrust::copy(rowIndices, rowIndices + N, A.row_indices.begin());
-  thrust::copy(colIndices, colIndices + N, A.column_indices.begin());
-  thrust::copy(values, values + NNZ, A.values.begin());
-
-  cusp::coo_matrix<int,float,cusp::device_memory> B(N,N,NNZ);
-  thrust::copy(rowIndices, rowIndices + N, B.row_indices.begin());
-  thrust::copy(colIndices, colIndices + N, B.column_indices.begin());
-  thrust::copy(values, values + NNZ, B.values.begin());
-
-  cusp::csr_matrix<int,float,cusp::device_memory> Acsr(A);
-  cusp::csr_matrix<int,float,cusp::device_memory> Bcsr(B);
-
-  cusp::coo_matrix<int,float,cusp::device_memory> C;
-  cusp::multiply(Acsr, Bcsr, C);
-  cusp::print(C);
-
-*/
-
 }  // End of function step0()
 
 
@@ -3202,10 +3122,6 @@ void step1(int iter)
    // Calculate the RHS vector of step 1.
    // R1 = - K * UnpHalf_prev - A * UnpHalf_prev - G * Pn;
 
-   //double *dummyR1;
-   //dummyR1 = double[3*NN];
-   //for(int)
-
    char transa, matdescra[6];
    double alpha = -1.0;
    double beta = 0.0;    // To add the calculated R1 to the previosuly calculated one.
@@ -3262,45 +3178,6 @@ void step1(int iter)
    delete[] pointerE;
    delete[] pointerE2;
 
-
-   /* MKL Sparse Matrix Vector Multiplication Test (Extracted from MKL's cspblas_dcs.c example code)
-
-   #define M 5
-   #define NNZ 13
-
-   double values[NNZ] = {1.0, -1.0, -3.0, -2.0, 5.0, 4.0, 6.0, 4.0, -4.0, 2.0, 7.0, 8.0, -5.0};
-   int columns[NNZ]   = {0, 1, 3, 0, 1, 2, 3, 4, 0, 2, 3, 1, 4};
-   int rowIndex[M+1]  = {0, 3,  5,  8,  11, 13};
-   double x_vec[M]	 = {1.0, 1.0, 1.0, 1.0, 1.0};
-   double y_vec[M]	 = {0.0, 0.0, 0.0, 0.0, 0.0};
-
-   char transa, matdescra[6];
-   double alpha = 1.0, beta = 0.0;
-   int m, k;
-   int pointerB[M], pointerE[M];
-
-   transa = 'n';
-   
-   matdescra[0] = 'g';
-   matdescra[1] = 'u';
-   matdescra[2] = 'n';
-   matdescra[3] = 'c';
-   
-   m = M;
-   
-   for (int i = 0; i < m; i++) {
-      pointerB[i] = rowIndex[i];
-      pointerE[i] = rowIndex[i+1];
-   };
-   
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, values, columns, pointerB, pointerE, x_vec, &beta, y_vec);
-
-   for (int i = 0; i < m; i++) {
-      printf("%7.1f\n", y_vec[i]);
-   }
-
-   */
-
 }  // End of function step1()
 
 
@@ -3345,7 +3222,7 @@ void step2(int iter)
       };
 
       mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseMdOrigInvTimesKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, dummyR2);   // This is (-dt*dt * inv(Md) * K * Acc_prev)  part of R2. It is also added to UnpHalf.
-   }
+   }                                                                                                                                                 // TODO: Isn't it better to calculate K * Acc_prev instead of sparseMdOrigInvTimesKvalue? It is also used in step3.
 
    alpha = 1.0;
    beta = 0.0;
@@ -4553,5 +4430,137 @@ void writeTecplotFile()
    datFile.close();
 } // End of function writeTecplotFile()
 
+*/
+
+
+
+
+
+/* CSparse Exercise
+
+   csi *Ai, *Aj;
+   double *Ax;
+
+   Ai = new csi[4];
+   Aj = new csi[4];
+   Ax = new double[10];
+
+   Ai[0] = 0;   Aj[0] = 0;   Ax[0] = 4.5;
+   Ai[1] = 1;   Aj[1] = 0;   Ax[1] = 3.1;
+   Ai[2] = 3;   Aj[2] = 0;   Ax[2] = 3.5;
+   Ai[3] = 1;   Aj[3] = 1;   Ax[3] = 2.9;
+   Ai[4] = 2;   Aj[4] = 1;   Ax[4] = 1.7;
+   Ai[5] = 3;   Aj[5] = 1;   Ax[5] = 0.4;
+   Ai[6] = 0;   Aj[6] = 2;   Ax[6] = 3.2;
+   Ai[7] = 2;   Aj[7] = 2;   Ax[7] = 3.0;
+   Ai[8] = 1;   Aj[8] = 3;   Ax[8] = 0.9;
+   Ai[9] = 3;   Aj[9] = 3;   Ax[9] = 1.0;
+
+   csi m = 4;
+   csi n = 4;
+   csi nzmax = 10;
+   csi values = 1;
+   csi triplet = 1;
+ 
+   cs *A_cs;
+   A_cs = cs_spalloc(m, n, nzmax, values, triplet);
+
+   A_cs->i = Ai;
+   A_cs->p = Aj;
+   A_cs->x = Ax;
+   A_cs->nz = 10;
+
+   cs *B_cs;
+   B_cs = cs_compress(A_cs);
+   cs_print(A_cs, 0);
+   cs_print(B_cs, 0);
+
+   //cs_spfree(A_cs);
+   //cs_spfree(B_cs);
+*/
+
+
+
+
+
+/* CUSP Exercise
+
+   int *rowIndices;
+   int *colIndices;
+   float *values;
+
+   int N = 3;
+   int NNZ = 3;
+   rowIndices = new int[N];
+   colIndices = new int[N];
+   values = new float[NNZ];
+
+   // initialize matrix entries on host
+   rowIndices[0] = 0; colIndices[0] = 2; values[0] = 10;
+   rowIndices[1] = 1; colIndices[1] = 0; values[1] = 20;
+   rowIndices[2] = 2; colIndices[2] = 0; values[2] = 30;
+
+  // A now represents the following matrix
+  //    [ 0  0  10]
+  //    [20  0   0]
+  //    [30  0   0]
+
+  cusp::coo_matrix<int,float,cusp::host_memory> A(N,N,NNZ);
+  thrust::copy(rowIndices, rowIndices + N, A.row_indices.begin());
+  thrust::copy(colIndices, colIndices + N, A.column_indices.begin());
+  thrust::copy(values, values + NNZ, A.values.begin());
+
+  cusp::coo_matrix<int,float,cusp::device_memory> B(N,N,NNZ);
+  thrust::copy(rowIndices, rowIndices + N, B.row_indices.begin());
+  thrust::copy(colIndices, colIndices + N, B.column_indices.begin());
+  thrust::copy(values, values + NNZ, B.values.begin());
+
+  cusp::csr_matrix<int,float,cusp::device_memory> Acsr(A);
+  cusp::csr_matrix<int,float,cusp::device_memory> Bcsr(B);
+
+  cusp::coo_matrix<int,float,cusp::device_memory> C;
+  cusp::multiply(Acsr, Bcsr, C);
+  cusp::print(C);
+*/
+
+
+
+
+
+/* MKL Sparse Matrix Vector Multiplication Test (Extracted from MKL's cspblas_dcs.c example code)
+
+#define M 5
+#define NNZ 13
+
+double values[NNZ] = {1.0, -1.0, -3.0, -2.0, 5.0, 4.0, 6.0, 4.0, -4.0, 2.0, 7.0, 8.0, -5.0};
+int columns[NNZ]   = {0, 1, 3, 0, 1, 2, 3, 4, 0, 2, 3, 1, 4};
+int rowIndex[M+1]  = {0, 3,  5,  8,  11, 13};
+double x_vec[M]	 = {1.0, 1.0, 1.0, 1.0, 1.0};
+double y_vec[M]	 = {0.0, 0.0, 0.0, 0.0, 0.0};
+
+char transa, matdescra[6];
+double alpha = 1.0, beta = 0.0;
+int m, k;
+int pointerB[M], pointerE[M];
+
+transa = 'n';
+   
+matdescra[0] = 'g';
+matdescra[1] = 'u';
+matdescra[2] = 'n';
+matdescra[3] = 'c';
+   
+m = M;
+   
+for (int i = 0; i < m; i++) {
+   pointerB[i] = rowIndex[i];
+   pointerE[i] = rowIndex[i+1];
+};
+   
+mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, values, columns, pointerB, pointerE, x_vec, &beta, y_vec);
+
+for (int i = 0; i < m; i++) {
+   printf("%7.1f\n", y_vec[i]);
+}
 
 */
