@@ -149,7 +149,7 @@ int sparseM_NNZ;        // Counts nonzero entries in i) a single sub-mass matrix
 double *sparseMvalue;   // Nonzero values of the global mass matrix. Actually the values of only the upper-left sub mass matrix are stored.
 int *sparseMcol;        // Nonzero columns of M, K and A matrices.
 int *sparseMrow;        // Nonzero rows of M, K and A matrices.
-int *sparseMrowIndex;   // Row start indices of M, K and A matrices (for CSR storage).
+int *sparseMrowStarts;  // Row start indices of M, K and A matrices (for CSR storage).
 
 double *sparseKvalue;   // Nonzero values of the global K matrix. K has the same sparsity structure as M.
 double *sparseAvalue;   // Nonzero values of the global A matrix. A has the same sparsity structure as M.
@@ -158,15 +158,12 @@ int sparseG_NNZ;        // Counts nonzero entries in i) sub-G matrix and ii) ful
 double *sparseGvalue;   // Nonzero values of the global G matrix.
 int *sparseGcol;        // Nonzero columns of G matrix.
 int *sparseGrow;        // Nonzero rows of G matrix.
-int *sparseGrowIndex;   // Row start indices of G matrix (for CSR storage).
+int *sparseGrowStarts;  // Row start indices of G matrix (for CSR storage).
 
 cs *G_cs, *G_cs_CSC;    // CSparse storage of [G]
 cs *Gt_cs_CSC;          // CSparse storage of [G] transpose
-//cs *K_cs, *K_cs_CSC;    // CSparse storage of [K]
-//cs *A_cs, *A_cs_CSC;    // CSparse storage of [A]
 
-
-double *sparseMdOrigInvTimesKvalue;  // Values of inv(Md) * K sparse matrix.
+double *KtimesAcc_prev; // [K]{Acc_prev}.
 
 cs *Z_cs;               // [Z] matrix.
 css *Z_sym;             // Symbolic analysis of [Z] using the CSparse library. Will be calculated in step0, and used in step2.
@@ -1609,26 +1606,26 @@ void setupSparseM()
 
    waitForUser("OK6. Enter a character... ");
 
-   // For CSR storage necessary for MKL and CUSP, we need rowIndex array too.
-   sparseMrowIndex = new int[3*NN+1];
-   sparseMrowIndex[0] = 0;
-   sparseMrowIndex[3*NN+1] = sparseM_NNZ;
+   // For CSR storage necessary for MKL and CUSP, we need row starts array too.
+   sparseMrowStarts = new int[3*NN+1];
+   sparseMrowStarts[0] = 0;
+   sparseMrowStarts[3*NN+1] = sparseM_NNZ;
    for (int i = 1; i <= NN; i++) {
-      sparseMrowIndex[i] = sparseMrowIndex[i-1] + NNZcolInARow[i-1];
+      sparseMrowStarts[i] = sparseMrowStarts[i-1] + NNZcolInARow[i-1];
    }
 
    for (int i = 1; i <= NN; i++) {
-      sparseMrowIndex[i + NN] = sparseMrowIndex[i-1 + NN] + NNZcolInARow[i-1];
+      sparseMrowStarts[i + NN] = sparseMrowStarts[i-1 + NN] + NNZcolInARow[i-1];
    }
    
    for (int i = 1; i <= NN; i++) {
-      sparseMrowIndex[i + 2*NN] = sparseMrowIndex[i-1 + 2*NN] + NNZcolInARow[i-1];
+      sparseMrowStarts[i + 2*NN] = sparseMrowStarts[i-1 + 2*NN] + NNZcolInARow[i-1];
    }
 
    // CONTROL
-   //cout << sparseMrowIndex[3*NN+1]  << "   "  << sparseM_NNZ << endl;
+   //cout << sparseMrowStarts[3*NN+1]  << "   "  << sparseM_NNZ << endl;
    //for (int i = 0; i < 3*NN+1; i++) {
-   //   cout << sparseMrowIndex[i] << endl;
+   //   cout << sparseMrowStarts[i] << endl;
    //}
 
 
@@ -1867,25 +1864,25 @@ void setupSparseG()
 
 
 
-   // For CSR storage necessary for MKL and CUSP, we need rowIndex array too.
-   sparseGrowIndex = new int[3*NN+1];
-   sparseGrowIndex[0] = 0;
-   sparseGrowIndex[3*NN+1] = sparseG_NNZ;
+   // For CSR storage necessary for MKL and CUSP, we need row starts array too.
+   sparseGrowStarts = new int[3*NN+1];
+   sparseGrowStarts[0] = 0;
+   sparseGrowStarts[3*NN+1] = sparseG_NNZ;
    for (int i = 1; i <= NN; i++) {
-      sparseGrowIndex[i] = sparseGrowIndex[i-1] + NNZcolInARow[i-1];
+      sparseGrowStarts[i] = sparseGrowStarts[i-1] + NNZcolInARow[i-1];
    }
 
    for (int i = 1; i <= NN; i++) {
-      sparseGrowIndex[i + NN] = sparseGrowIndex[i-1 + NN] + NNZcolInARow[i-1];
+      sparseGrowStarts[i + NN] = sparseGrowStarts[i-1 + NN] + NNZcolInARow[i-1];
    }
    
    for (int i = 1; i <= NN; i++) {
-      sparseGrowIndex[i + 2*NN] = sparseGrowIndex[i-1 + 2*NN] + NNZcolInARow[i-1];
+      sparseGrowStarts[i + 2*NN] = sparseGrowStarts[i-1 + 2*NN] + NNZcolInARow[i-1];
    }
 
-   //cout << sparseGrowIndex[3*NN+1]  << "   "  << sparseG_NNZ << endl;
+   //cout << sparseGrowStarts[3*NN+1]  << "   "  << sparseG_NNZ << endl;
    //for (int i = 0; i < 3*NN+1; i++) {
-   //   cout << sparseGrowIndex[i] << endl;
+   //   cout << sparseGrowStarts[i] << endl;
    //}
    //cout << "\n\n\n\n";
 
@@ -2496,7 +2493,7 @@ void initializeAndAllocate()
    MdInv     = new double[3*NN];        // Inverse of the diagonalized mass matrix with BCs applied
    MdOrigInv = new double[3*NN];        // Inverse of the diagonalized mass matrix without BCs applied
 
-   sparseMdOrigInvTimesKvalue = new double[sparseM_NNZ];   // Values of inv(Md) * K sparse matrix
+   KtimesAcc_prev = new double[3*NN];   // [K]{Acc_prev}
 
    R1 = new double[3*NN];               // RHS vector of intermediate velocity calculation.
    R2 = new double[NNp];                // RHS vector of pressure calculation.
@@ -2658,6 +2655,29 @@ void timeLoop()
          for (int i = 0; i < NNp; i++) {
             Pnp1_prev[i] = Pnp1[i];
          }
+
+         // Calculate KtimesAcc_prev that'll be used for step2 and step3 of the coming iterations
+         char transa, matdescra[6];
+         double alpha, beta;
+         int m = 3*NN;
+         int *pointerE;
+         pointerE = new int[m];
+
+         matdescra[0] = 'g';
+         matdescra[1] = 'u';
+         matdescra[2] = 'n';
+         matdescra[3] = 'c';
+
+         alpha = 1.0;
+         beta = 0.0;
+         transa = 'n';
+
+         for (int i = 0; i < m; i++) {
+            pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
+         };
+
+         mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prev, &beta, KtimesAcc_prev);
+
       }  // End of iter loop
      
      
@@ -2864,49 +2884,43 @@ void step0()
    //   cout << MdInv[i] << endl;
    //}
 
-   // Calculate inv(Md) * K. It'll be used in step2.
-   for (int i = 0; i < sparseM_NNZ; i++) {
-      sparseMdOrigInvTimesKvalue[i] = sparseKvalue[i] * MdOrigInv[sparseMrow[i]];
-      //cout << i << "   " << sparseMrow[i] << "   " << sparseMcol[i] << "   " << sparseMdOrigInvTimesKvalue[i] << endl;
-   }
-
-
 
    // Use Timothy Davis' CSparse package to store matrix G and its transpose in sparse format.
-   // CSparse library uses type csi instead of int. So we need to redifine some variables.
 
-   // TODO : This is simply waste of memory. Do something to avoid this.                                                                             TODO
+   // Create colStarts array for the G matrix.
+   /*
+   int *sparseGcolStarts;
+   sparseGcolStarts = new int[NNp+1];
+   for (int i = 0; i < NNp+1; i++) {
+      sparseGcolStarts[i] = 0;
+   }
+   
+   for (int i = 0; i < sparseG_NNZ; i++) {   // Find the number of nonzeros entries in each column, but store values for the next column, i.e. number of nozeros of column c is stored to entry c+1.
+      sparseGcolStarts[sparseGcol[i] + 1] += 1;
+   }
+   
+   for (int i = 1; i < NNp+1; i++) {         // Add the nonzero entries in each column properly to determine colStarts
+      sparseGcolStarts[i] = sparseGcolStarts[i] + sparseGcolStarts[i - 1];
+   }
 
-   //int sparseM_NNZcs;      // Counts nonzero entries in i) a single sub-mass matrix and ii) full Mass matrix.
-   //csi *sparseMcolcs;      // Nonzero columns of M, K and A matrices.
-   //csi *sparseMrowcs;      // Nonzero rows of M, K and A matrices.
-   //int sparseG_NNZcs;      // Counts nonzero entries in i) sub-G matrix and ii) full G matrix.
-   //int *sparseGcolcs;      // Nonzero columns of G matrix.
-   //int *sparseGrowcs;      // Nonzero rows of G matrix.
-   //sparseGcolcs = new int[3 * sparseG_NNZ];
-   //sparseGrowcs = new int[3 * sparseG_NNZ];
-   //sparseMcolcs = new csi[3 * sparseM_NNZ];
-   //sparseMrowcs = new csi[3 * sparseM_NNZ];
-   //sparseM_NNZcs = sparseM_NNZ;
-   //sparseG_NNZcs = sparseG_NNZ;
-   //for (int i = 0; i < sparseG_NNZ; i++) {
-   //   sparseGcolcs[i] = sparseGcol[i];
-   //   sparseGrowcs[i] = sparseGrow[i];
-   //}
-   //for (int i = 0; i < sparseM_NNZ; i++) {
-   //   sparseMcolcs[i] = sparseMcol[i];
-   //   sparseMrowcs[i] = sparseMrow[i];
-   //}
+   // CONTROL
+   //cout << endl << "NNp+1 entry of sparseGcolStarts = " << sparseGcolStarts[NNp] << endl;
+   */
 
-   G_cs = cs_spalloc(3*NN, NNp, sparseG_NNZ, 0, 1);   // See page 12 of Tim Davis' book.                                                             // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
-                                                                                                                                                     //        Why don't we directly allocate this in compressed format?
+   waitForUser("OK00. Enter a character... ");
 
+   G_cs = cs_spalloc(3*NN, NNp, sparseG_NNZ, 1, 1);   // See page 12 of Tim Davis' book.                                                             // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
+                                                                                                                                                     //        To directly allocate this in CSC format we need column wise ordering info.
    G_cs->i = sparseGrow;
    G_cs->p = sparseGcol;
    G_cs->x = sparseGvalue;
    G_cs->nz = sparseG_NNZ;
 
+   waitForUser("OK01. Enter a character... ");
+
    G_cs_CSC = cs_compress(G_cs);             // Convert G from triplet format into compressed column format.
+
+   waitForUser("OK02. Enter a character... ");
 
    Gt_cs_CSC = cs_transpose(G_cs_CSC, 1);    // Determine the transpose of G in compressed column format.
 
@@ -2932,6 +2946,9 @@ void step0()
    dummy_cs->p = sparseGcol;
    dummy_cs->x = dummyValues;
    dummy_cs->nz = sparseG_NNZ;
+
+   waitForUser("OK11. Enter a character... ");
+
    // Convert dummy matrix from triplet format to CSC format
    cs *dummy_cs_CSC;
    dummy_cs_CSC = cs_compress(dummy_cs);
@@ -2940,6 +2957,8 @@ void step0()
 
    // Multiply transpose(G) with the dummy matrix
    Z_cs = cs_multiply(Gt_cs_CSC, dummy_cs_CSC);
+
+   waitForUser("OK21. Enter a character... ");
    
    //cs_spfree(dummy_cs);    // If we delete this sparseGcol is also deleted, but we need it later.                                                  // TODO
    delete[] dummyValues;
@@ -2981,25 +3000,9 @@ void step0()
    cout << endl << "NNZ of Z = " << Z_cs->nzmax << endl;
    cout << endl << "NNZ of Z_chol->L = " << Z_chol->L->nzmax << endl;
 
+   waitForUser("OK5. Enter a character... ");
 
-   // Do allocations for CSparse matrices that'll be used in the following steps.
-   // See page 12 of Tim Davis' book.
-   //K_cs = cs_spalloc(3*NN, 3*NN, sparseM_NNZ, 1, 1);
-   //K_cs->i = sparseMrow;
-   //K_cs->p = sparseMcol;
-   //K_cs->x = sparseKvalue;
-   //K_cs->nz = sparseM_NNZ;
-   //A_cs = cs_spalloc(3*NN, 3*NN, sparseM_NNZ, 1, 1);
-   //A_cs->i = sparseMrow;
-   //A_cs->p = sparseMcol;
-   //A_cs->nz = sparseM_NNZ;
-
-
-   // Deallocate memory                                                                                                                              // TODO
-   //delete[] sparseGcolcs;
-   //delete[] sparseGcolcs;
-   //delete[] sparseMcolcs;
-   //delete[] sparseMrowcs;
+   // Deallocate memory
    delete[] Md;
    delete[] MdOrigInv;
    cs_spfree(Z_cs);
@@ -3140,16 +3143,16 @@ void step1(int iter)
    matdescra[3] = 'c';
    
    for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
+      pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
    };
    for (int i = 0; i < m; i++) {
-      pointerE2[i] = sparseGrowIndex[i+1];  // A new form of rowIndex data required by mkl_dcsrmv
+      pointerE2[i] = sparseGrowStarts[i+1];  // A new form of rowStarts data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowIndex, pointerE, UnpHalf_prev, &beta, R1);   // This is (- K * UnpHalf_prev)  part of R1
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev, &beta, R1);   // This is (- K * UnpHalf_prev)  part of R1
    beta = 1.0;    // To add the calculated R1 to the previosuly calculated one.
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowIndex, pointerE, UnpHalf_prev, &beta, R1);   // This is (- A * UnpHalf_prev)  part of R1
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowIndex, pointerE2, Pn, &beta, R1);            // This is (- G * Pn          )  part of R1
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev, &beta, R1);   // This is (- A * UnpHalf_prev)  part of R1
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R1);             // This is (- G * Pn          )  part of R1
 
    // CONTROL
    //for (int i = 0; i < m; i++) {
@@ -3200,6 +3203,7 @@ void step2(int iter)
       dummyR2[i] = UnpHalf[i];
    }
 
+   
    char transa, matdescra[6];
    double alpha, beta;
    int m = 3*NN;
@@ -3211,18 +3215,13 @@ void step2(int iter)
    matdescra[2] = 'n';
    matdescra[3] = 'c';
 
-   if (iter > 1) {   // Skip this part for the first iteration because Acc_prev is zero for it.
-      alpha = -dt*dt;
-      beta = 1.0;          // Add the calculated dummyR2 to the previous dummyR2
-
-      transa = 'n';
-
-      for (int i = 0; i < m; i++) {
-         pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
-      };
-
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseMdOrigInvTimesKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, dummyR2);   // This is (-dt*dt * inv(Md) * K * Acc_prev)  part of R2. It is also added to UnpHalf.
-   }                                                                                                                                                 // TODO: Isn't it better to calculate K * Acc_prev instead of sparseMdOrigInvTimesKvalue? It is also used in step3.
+   // Subtract dt*dt * MdOrigInv * K * Acc_prev from UnpHalf
+   if (iter != 1) {   // KtimesAcc_prev = 0. So skip this part
+      double dt2 = dt*dt;
+      for (int i = 0; i < 3*NN; i++) {
+         dummyR2[i] = dummyR2[i] - dt2 * MdOrigInv[i] * KtimesAcc_prev[i];
+      }
+   }
 
    alpha = 1.0;
    beta = 0.0;
@@ -3230,10 +3229,10 @@ void step2(int iter)
    transa = 't';    // Multiply using Gt, not G
       
    for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseGrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
+      pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowIndex, pointerE, dummyR2, &beta, R2);   // This is (Gt * dummyR2) which gives R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowStarts, pointerE, dummyR2, &beta, R2);   // This is (Gt * dummyR2) which gives R2
 
    // CONTROL
    //for (int i=0; i<NNp; i++) {
@@ -3307,28 +3306,33 @@ void step3(int iter)
    matdescra[2] = 'n';
    matdescra[3] = 'c';
 
-   if (iter > 1) {   // Skip this part for the first iteration because Acc_prev is zero for it.
+   /*
+   if (iter != 1) {   // Skip this part for the first iteration because Acc_prev is zero for it.
    
       for (int i = 0; i < m; i++) {
-         pointerE[i] = sparseMrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
+         pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
       };
 
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowIndex, pointerE, Acc_prev, &beta, R3);   // This is (-dt * K * Acc_prev)  part of R3.
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prev, &beta, R3);   // This is (-dt * K * Acc_prev)  part of R3.
    }
-   
-   if (iter > 1) {
-      beta = 1.0;     // Add to the previously calculated R3 if iter > 1.
+   */
+
+   if (iter != 1) {   // KtimesAcc_prev = 0. So skip this part
+      for (int i = 0; i < 3*NN; i++) {
+         R3[i] = - dt * KtimesAcc_prev[i];
+      }
+      beta = 1.0;     // Below, add to the previously calculated R3 if iter != 1.
    } else {
-      beta = 0.0;     // Directly calculate R3 if iter == 1.
+      beta = 0.0;     // Below, directly calculate R3 if iter == 1.
    }
 
    int k = NNp;
    
    for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseGrowIndex[i+1];   // A new form of rowIndex data required by mkl_dcsrmv
+      pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowIndex, pointerE, Pdot, &beta, R3);   // This is (-dt * G * Pdot) part of R3. It is added to the preiously calculated part if iter > 1.
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R3);   // This is (-dt * G * Pdot) part of R3. It is added to the preiously calculated part if iter > 1.
 
    // CONTROL
    //for (int i=0; i<3*NN; i++) {
@@ -3775,7 +3779,7 @@ void waitForUser(string str)
    // Used for checking memory usage. Prints the input string to the screen and
    // waits for the user to enter a character.
 
-   //char dummyUserInput;
+   char dummyUserInput;
    //cout << str;
    //cin >> dummyUserInput;
 }
@@ -4564,3 +4568,60 @@ for (int i = 0; i < m; i++) {
 }
 
 */
+
+
+
+
+
+/*
+// CSparse transpose test
+cs *AA;
+cs *AAt;
+int AA_NNZ = 10;
+int *AArow;
+AArow = new int[AA_NNZ];
+int *AAcolstarts;
+AAcolstarts = new int[5];
+double *AAvalue;
+AAvalue = new double[AA_NNZ];
+AArow[0] = 0;
+AArow[1] = 1;
+AArow[2] = 3;
+AArow[3] = 1;
+AArow[4] = 2;
+AArow[5] = 3;
+AArow[6] = 0;
+AArow[7] = 2;
+AArow[8] = 1;
+AArow[9] = 3;
+AAvalue[0] = 4.5;
+AAvalue[1] = 3.2;
+AAvalue[2] = 3.1;
+AAvalue[3] = 2.9;
+AAvalue[4] = 0.9;
+AAvalue[5] = 1.7;
+AAvalue[6] = 3.0;
+AAvalue[7] = 3.5;
+AAvalue[8] = 0.4;
+AAvalue[9] = 1.0;
+AAcolstarts[0] = 0;
+AAcolstarts[1] = 3;
+AAcolstarts[2] = 6;
+AAcolstarts[3] = 8;
+AAcolstarts[4] = 10;
+
+AA = cs_spalloc(4, 4, AA_NNZ, 1, 0);
+AA->i = AArow;
+AA->p = AAcolstarts;
+AA->x = AAvalue;
+//AA->nz = AA_NNZ;  // cs_print fails when you put this
+
+cs_print(AA,0);
+
+//G_cs_CSC = cs_compress(G_cs);             // Convert G from triplet format into compressed column format.
+
+AAt = cs_transpose(AA, 1);    // Determine the transpose of G in compressed column format.
+
+cs_print(AAt,0);
+*/
+
