@@ -1,11 +1,5 @@
 //
-// Based on Backup 3
-//
-// For NE=27 mesh, running with F5 in Release mode fails.
-//
-// 3D MATLAB kodunu 01-10-2013'de C++'a cevirmeye basladim.
-// 25-12-2013'de C++'dan ilk Cavity cevabini aldim.
-//
+//                                                                                                                                                   TODO: For NE=27 mesh, running with F5 in Release mode fails.
 //
 
 
@@ -139,7 +133,7 @@ int zeroPressureNode;   // Node where pressure is set to zero. A negative value 
 double monPointCoord[3];   // Coordinates of the monitor point.
 int monPoint;              // Node that is being monitored.
 
-int ** elemsOfVelNodes;    // List of elements that are connected to velocity nodes
+int **elemsOfVelNodes;     // List of elements that are connected to velocity nodes
 int **elemsOfPresNodes;    // List of elements that are connected to pressure nodes
 int *NelemOfVelNodes;      // Number of elements connnected to velocity nodes
 int *NelemOfPresNodes;     // Number of elements connnected to pressure nodes
@@ -147,21 +141,23 @@ int *NelemOfPresNodes;     // Number of elements connnected to pressure nodes
 
 int sparseM_NNZ;        // Counts nonzero entries in i) a single sub-mass matrix and ii) full Mass matrix.
 double *sparseMvalue;   // Nonzero values of the global mass matrix. Actually the values of only the upper-left sub mass matrix are stored.
-int *sparseMcol;        // Nonzero columns of M, K and A matrices.
-int *sparseMrow;        // Nonzero rows of M, K and A matrices.
-int *sparseMrowStarts;  // Row start indices of M, K and A matrices (for CSR storage).
+int *sparseMcol;        // Nonzero columns of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
+int *sparseMrow;        // Nonzero rows of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
+int *sparseMrowStarts;  // Row start indices of M, K and A matrices (for CSR storage). Info is kept only for the upper-left sub mass matrix.
 
-double *sparseKvalue;   // Nonzero values of the global K matrix. K has the same sparsity structure as M.
-double *sparseAvalue;   // Nonzero values of the global A matrix. A has the same sparsity structure as M.
+double *sparseKvalue;   // Nonzero values of the global K matrix. Actually the values of only the upper-left sub stiffness matrix are stored. [K] has the same sparsity structure as [M].
+double *sparseAvalue;   // Nonzero values of the global A matrix. Actually the values of only the upper-left sub mass matrix are stored. [A] has the same sparsity structure as [M].
 
 int sparseG_NNZ;        // Counts nonzero entries in i) sub-G matrix and ii) full G matrix.
-double *sparseGvalue;   // Nonzero values of the global G matrix.
-int *sparseGcol;        // Nonzero columns of G matrix.
-int *sparseGrow;        // Nonzero rows of G matrix.
+double *sparseG1value;  // Nonzero values of the 1st part of the global G matrix.
+double *sparseG2value;  // Nonzero values of the 2nd part of the global G matrix.
+double *sparseG3value;  // Nonzero values of the 3rd part of the global G matrix.
+int *sparseGcol;        // Nonzero columns of only one sub G matrix.
+int *sparseGrow;        // Nonzero rows of only one sub G matrix.
 int *sparseGrowStarts;  // Row start indices of G matrix (for CSR storage).
 
-cs *G_cs, *G_cs_CSC;    // CSparse storage of [G]
-cs *Gt_cs_CSC;          // CSparse storage of [G] transpose
+cs *G1_cs, *G2_cs, *G3_cs, *G1_cs_CSC, *G2_cs_CSC, *G3_cs_CSC;    // CSparse storage of sub [G] matrices
+cs *G1t_cs_CSC, *G2t_cs_CSC, *G3t_cs_CSC;                         // CSparse storage of tranposes of sub [G] matrices
 
 double *KtimesAcc_prev; // [K]{Acc_prev}.
 
@@ -213,9 +209,10 @@ double *MdInv;            // Inverse of the diagonalized mass matrix with BCs ap
 double *MdOrigInv;        // Inverse of the diagonalized mass matrix without BCs applied
 
 double *R1;               // RHS vector of intermediate velocity calculation.
+double *R11, *R12, *R13;
 double *R2;               // RHS vector of pressure calculation.
 double *R3;               // RHS vector of new velocity calculation.
-
+double *R31, *R32, *R33;
 
 //int nDATiter;        // Period of saving results.
 //int nMonitorPoints;     // Number of monitor points.
@@ -1352,6 +1349,10 @@ void determineVelBCnodes()
    }
 
    delete[] velBCinfo;
+   
+   for (int i = 0; i<BCnVelFaces; i++) {
+      delete[] BCvelFaces[i];
+   }
    delete[] BCvelFaces;
 
 
@@ -1554,18 +1555,12 @@ void setupSparseM()
    // Allocate memory for 3 vectors of sparseM. Thinking about the whole
    // mass matrix, let's define the sizes properly by using three times of the
    // calculated NNZ.
-   sparseMcol   = new int[3 * sparseM_NNZ_onePart];
-
-   waitForUser("OK2. Enter a character... ");
-   
-   sparseMrow   = new int[3 * sparseM_NNZ_onePart];
-
-   waitForUser("OK3. Enter a character... ");
-
+   sparseMcol   = new int[sparseM_NNZ_onePart];
+   sparseMrow   = new int[sparseM_NNZ_onePart];
    sparseMvalue = new double[sparseM_NNZ_onePart];
-   
-   waitForUser("OK4. Enter a character... ");
 
+   waitForUser("OK2,3,4. Enter a character... ");
+   
    // Fill in soln.sparseM.col and soln.sparseM.row arrays
    // This is done in a row-by-row way.
    int NNZcounter = 0;
@@ -1577,19 +1572,6 @@ void setupSparseM()
       }
    }
 
-   // Actually mass matrix is not NNxNN, but 3NNx3NN. Its middle part and 
-   // lower right parts are the same as its upper right part, and the other 6
-   // blocks are full of zeros. What we set up above is only the upper right
-   // part. Let's extend the row, col and value arrays to accomodate the
-   // middle and lower right parts too.
-                                                                                                                                                     // TODO: Is this expansion really necessary or can we save some memory by not doing it.
-   for (int i = 0; i < sparseM_NNZ_onePart; i++) {
-      sparseMrow[i +     sparseM_NNZ_onePart] = sparseMrow[i] + NN;
-      sparseMrow[i + 2 * sparseM_NNZ_onePart] = sparseMrow[i] + 2*NN;
-      sparseMcol[i +     sparseM_NNZ_onePart] = sparseMcol[i] + NN;
-      sparseMcol[i + 2 * sparseM_NNZ_onePart] = sparseMcol[i] + 2*NN;
-   }
-
    sparseM_NNZ = 3 * sparseM_NNZ_onePart;   // Triple the number of nonzeros.
    
    // CONTROL
@@ -1598,33 +1580,21 @@ void setupSparseM()
 
    // Sparse storage of the K and A matrices are the same as M. Only extra
    // value arrays are necessary.
-   sparseKvalue = new double[sparseM_NNZ];
+   sparseKvalue = new double[sparseM_NNZ/3];    // Only store the nonzeros of the upper-left sub matrix.
+   sparseAvalue = new double[sparseM_NNZ/3];    // Only store the nonzeros of the upper-left sub matrix.
 
-   waitForUser("OK5. Enter a character... ");
-
-   sparseAvalue = new double[sparseM_NNZ];
-
-   waitForUser("OK6. Enter a character... ");
+   waitForUser("OK5,6. Enter a character... ");
 
    // For CSR storage necessary for MKL and CUSP, we need row starts array too.
-   sparseMrowStarts = new int[3*NN+1];
+   sparseMrowStarts = new int[NN+1];
    sparseMrowStarts[0] = 0;
-   sparseMrowStarts[3*NN+1] = sparseM_NNZ;
    for (int i = 1; i <= NN; i++) {
       sparseMrowStarts[i] = sparseMrowStarts[i-1] + NNZcolInARow[i-1];
    }
 
-   for (int i = 1; i <= NN; i++) {
-      sparseMrowStarts[i + NN] = sparseMrowStarts[i-1 + NN] + NNZcolInARow[i-1];
-   }
-   
-   for (int i = 1; i <= NN; i++) {
-      sparseMrowStarts[i + 2*NN] = sparseMrowStarts[i-1 + 2*NN] + NNZcolInARow[i-1];
-   }
-
    // CONTROL
-   //cout << sparseMrowStarts[3*NN+1]  << "   "  << sparseM_NNZ << endl;
-   //for (int i = 0; i < 3*NN+1; i++) {
+   //cout << sparseMrowStarts[NN+1]  << "   "  << sparseM_NNZ/3 << endl;
+   //for (int i = 0; i < NN+1; i++) {
    //   cout << sparseMrowStarts[i] << endl;
    //}
 
@@ -1708,23 +1678,6 @@ void setupSparseM()
    delete[] rowStarts;
 
 }  // End of function setupSparseM()
-
-
-
-
-
-
-//========================================================================
-void upperSparseM()
-//========================================================================
-{
-   // Actually mass matrix is symmetric. We only need to store its upper
-   // triangular part.
-
-
-
-
-}  // End of function upperSparseM()
 
 
 
@@ -1824,12 +1777,14 @@ void setupSparseG()
    */
 
 
-   // Allocate memory for 3 vectors of sparseG. Thinking about the whole
-   // G matrix, let's define the sizes properly by using three times of the
-   // calculated NNZ.
-   sparseGcol   = new int[3 * sparseG_NNZ_onePart];
-   sparseGrow   = new int[3 * sparseG_NNZ_onePart];
-   sparseGvalue = new double[3 * sparseG_NNZ_onePart];
+   // Allocate memory for 3 vectors of sparseG. G matrix consiss of three sub matrices.
+   // They all have the same sparsity structure with different value vectors.
+   sparseGcol   = new int[sparseG_NNZ_onePart];
+   sparseGrow   = new int[sparseG_NNZ_onePart];
+   sparseG1value = new double[sparseG_NNZ_onePart];
+   sparseG2value = new double[sparseG_NNZ_onePart];
+   sparseG3value = new double[sparseG_NNZ_onePart];
+
 
    // Fill in soln.sparseG.col and soln.sparseG.row arrays
    // This is done in a row-by-row way.
@@ -1842,19 +1797,6 @@ void setupSparseG()
       }
    }
 
-
-   // Actually G matrix is not NNxNNp, but 3NNxNNp. Its middle and lower
-   // parts are the same as its upper part. What we set up above is only the
-   // upper part. Let's extend the row, col and value arrays to accomodate
-   // the middle and lower parts too.
-                                                                                                                                                     // TODO: Is this expansion really necessary or can we save some memory by not doing it.
-   for (int i = 0; i < sparseG_NNZ_onePart; i++) {
-      sparseGrow[i +     sparseG_NNZ_onePart] = sparseGrow[i] + NN;
-      sparseGrow[i + 2 * sparseG_NNZ_onePart] = sparseGrow[i] + 2*NN;
-      sparseGcol[i +     sparseG_NNZ_onePart] = sparseGcol[i];
-      sparseGcol[i + 2 * sparseG_NNZ_onePart] = sparseGcol[i];
-   }
-
    sparseG_NNZ = 3 * sparseG_NNZ_onePart;   // Triple the number of nonzeros.
    
    // CONTROL
@@ -1863,25 +1805,17 @@ void setupSparseG()
 
 
 
-
-   // For CSR storage necessary for MKL and CUSP, we need row starts array too.
-   sparseGrowStarts = new int[3*NN+1];
+   // For CSR storage necessary for MKL and CUSP, we need row starts array too.                                                                      // TODO: This is repeated below.
+   sparseGrowStarts = new int[NN+1];
    sparseGrowStarts[0] = 0;
-   sparseGrowStarts[3*NN+1] = sparseG_NNZ;
+   //sparseGrowStarts[NN] = sparseG_NNZ;
    for (int i = 1; i <= NN; i++) {
       sparseGrowStarts[i] = sparseGrowStarts[i-1] + NNZcolInARow[i-1];
    }
 
-   for (int i = 1; i <= NN; i++) {
-      sparseGrowStarts[i + NN] = sparseGrowStarts[i-1 + NN] + NNZcolInARow[i-1];
-   }
-   
-   for (int i = 1; i <= NN; i++) {
-      sparseGrowStarts[i + 2*NN] = sparseGrowStarts[i-1 + 2*NN] + NNZcolInARow[i-1];
-   }
-
-   //cout << sparseGrowStarts[3*NN+1]  << "   "  << sparseG_NNZ << endl;
-   //for (int i = 0; i < 3*NN+1; i++) {
+   // CONTROL
+   //cout << sparseGrowStarts[NN+1]  << "   "  << sparseG_NNZ/3 << endl;
+   //for (int i = 0; i < NN+1; i++) {
    //   cout << sparseGrowStarts[i] << endl;
    //}
    //cout << "\n\n\n\n";
@@ -1898,6 +1832,8 @@ void setupSparseG()
    rowStarts[0] = 0;   // First row starts with the zeroth entry
    for (int i = 1; i < NN+1; i++) {
       rowStarts[i] = rowStarts[i-1] + NNZcolInARow[i-1];
+      //  CONTROL
+      //cout << "i = " << i << "   rowStarts[i] = " << rowStarts[i] << endl;
    }
 
 
@@ -1908,7 +1844,6 @@ void setupSparseG()
          sparseMapG[i][j] = new int[NENp];
       }
    }
-
 
    int r, c;
 
@@ -1957,7 +1892,6 @@ void setupSparseG()
    delete[] NNZcolInARow;
 
    delete[] rowStarts;
-
 
    for (int i = 0; i<NN; i++) {
       delete[] elemsOfVelNodes[i];
@@ -2489,32 +2423,49 @@ void initializeAndAllocate()
    Pdot      = new double[NNp];         // Pdot_i+1^n+1 of the reference paper.
 
    Md        = new double[3*NN];        // Diagonalized mass matrix with BCs applied
-   MdOrig    = new double[3*NN];        // Diagonalized mass matrix without BCs applied
    MdInv     = new double[3*NN];        // Inverse of the diagonalized mass matrix with BCs applied
+   MdOrig    = new double[3*NN];        // Diagonalized mass matrix without BCs applied
    MdOrigInv = new double[3*NN];        // Inverse of the diagonalized mass matrix without BCs applied
 
    KtimesAcc_prev = new double[3*NN];   // [K]{Acc_prev}
 
    R1 = new double[3*NN];               // RHS vector of intermediate velocity calculation.
+   R11 = new double[NN];
+   R12 = new double[NN];
+   R13 = new double[NN];
+
    R2 = new double[NNp];                // RHS vector of pressure calculation.
+
    R3 = new double[3*NN];               // RHS vector of new velocity calculation.
+   R31 = new double[NN];
+   R32 = new double[NN];
+   R33 = new double[NN];
 
 
    // Initialize all these variables to zero
    for (int i = 0; i < 3*NN; i++) {
-      Un[i]              = 0.0;
-      Unp1[i]            = 0.0;
-      Unp1_prev[i]       = 0.0;
-      UnpHalf[i]         = 0.0;
-      UnpHalf_prev[i]    = 0.0;
-      AccHalf[i]         = 0.0;
-      Acc[i]             = 0.0;
-      Acc_prev[i]        = 0.0;
-      Md[i]              = 0.0;
-      MdOrig[i]          = 0.0;
-      MdOrigInv[i]       = 0.0;
-      R1[i] = 0.0;
-      R3[i] = 0.0;
+      Un[i]            = 0.0;
+      Unp1[i]          = 0.0;
+      Unp1_prev[i]     = 0.0;
+      UnpHalf[i]       = 0.0;
+      UnpHalf_prev[i]  = 0.0;
+      AccHalf[i]       = 0.0;
+      Acc[i]           = 0.0;
+      Acc_prev[i]      = 0.0;
+      Md[i]            = 0.0;
+      MdOrig[i]        = 0.0;
+      MdOrigInv[i]     = 0.0;
+      R1[i]            = 0.0;
+      R3[i]            = 0.0;
+   }
+
+   for (int i = 0; i < NN; i++) {
+      R11[i] = 0.0;
+      R12[i] = 0.0;
+      R13[i] = 0.0;
+      R31[i] = 0.0;
+      R32[i] = 0.0;
+      R33[i] = 0.0;
    }
 
    for (int i = 0; i < NNp; i++) {
@@ -2659,7 +2610,7 @@ void timeLoop()
          // Calculate KtimesAcc_prev that'll be used for step2 and step3 of the coming iterations
          char transa, matdescra[6];
          double alpha, beta;
-         int m = 3*NN;
+         int m = NN;
          int *pointerE;
          pointerE = new int[m];
 
@@ -2672,11 +2623,42 @@ void timeLoop()
          beta = 0.0;
          transa = 'n';
 
-         for (int i = 0; i < m; i++) {
+         for (int i = 0; i < NN; i++) {
             pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
          };
 
-         mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prev, &beta, KtimesAcc_prev);
+         double *KtimesAcc_prevSmall;
+         double *Acc_prevSmall;
+         KtimesAcc_prevSmall = new double[NN];
+         Acc_prevSmall = new double[NN];
+
+         for (int i = 0; i < NN; i++) {
+            Acc_prevSmall[i] = Acc_prev[i];
+         }
+         mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 1st part of [K] * {Acc_prev}
+         for (int i = 0; i < NN; i++) {
+            KtimesAcc_prev[i] = KtimesAcc_prevSmall[i];
+         }
+
+         for (int i = 0; i < NN; i++) {
+            Acc_prevSmall[i] = Acc_prev[i + NN];
+         }
+         mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 2nd part of [K] * {Acc_prev}
+         for (int i = 0; i < NN; i++) {
+            KtimesAcc_prev[i + NN] = KtimesAcc_prevSmall[i];
+         }
+
+         for (int i = 0; i < NN; i++) {
+            Acc_prevSmall[i] = Acc_prev[i + 2*NN];
+         }
+         mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 3rd part of [K] * {Acc_prev}
+         for (int i = 0; i < NN; i++) {
+            KtimesAcc_prev[i + 2*NN] = KtimesAcc_prevSmall[i];
+         }
+
+         delete[] pointerE;
+         delete[] KtimesAcc_prevSmall;
+         delete[] Acc_prevSmall;
 
       }  // End of iter loop
      
@@ -2729,12 +2711,14 @@ void step0()
       sparseMvalue[i] = 0.0;
    }
 
-   for (int i = 0; i < sparseM_NNZ; i++){
+   for (int i = 0; i < sparseM_NNZ/3; i++){
 	   sparseKvalue[i] = 0.0;
    }
 
-   for (int i = 0; i < sparseG_NNZ; i++){
-      sparseGvalue[i] = 0.0;
+   for (int i = 0; i < sparseG_NNZ/3; i++){
+      sparseG1value[i] = 0.0;
+      sparseG2value[i] = 0.0;
+      sparseG3value[i] = 0.0;
    }
 
    Me_11 = new double*[NENv];
@@ -2794,22 +2778,17 @@ void step0()
       // Assemble Me and Ke into sparse M and K.
       for (int i = 0; i < NENv; i++) {
          for (int j = 0; j < NENv; j++) {
-            sparseMvalue[sparseMapM[e][i][j]]         += Me_11[i][j];   // Assemble upper left sub-matrix of M
-            //sparseMvalue[sparseMapM[e][i][j] + nnzM]  += Me_11[i][j];   // Assemble middle sub-matrix of M
-            //sparseMvalue[sparseMapM[e][i][j] + nnzM2] += Me_11[i][j];   // Assemble lower right sub-matrix of M
-
-            sparseKvalue[sparseMapM[e][i][j]]         += Ke_11[i][j];   // Assemble upper left sub-matrix of K
-            sparseKvalue[sparseMapM[e][i][j] + nnzM]  += Ke_11[i][j];   // Assemble middle sub-matrix of K
-            sparseKvalue[sparseMapM[e][i][j] + nnzM2] += Ke_11[i][j];   // Assemble lower right sub-matrix of K
+            sparseMvalue[sparseMapM[e][i][j]] += Me_11[i][j];   // Assemble upper left sub-matrix of M
+            sparseKvalue[sparseMapM[e][i][j]] += Ke_11[i][j];   // Assemble upper left sub-matrix of K
          }
       }
      
       // Assemble Ge into sparse G.
       for (int i = 0; i < NENv; i++) {
          for (int j = 0; j < NENp; j++) {
-            sparseGvalue[sparseMapG[e][i][j]]         += Ge_1[i][j];   // Assemble upper part of G
-            sparseGvalue[sparseMapG[e][i][j] + nnzG]  += Ge_2[i][j];   // Assemble middle of G
-            sparseGvalue[sparseMapG[e][i][j] + nnzG2] += Ge_3[i][j];   // Assemble lower part of G
+            sparseG1value[sparseMapG[e][i][j]] += Ge_1[i][j];   // Assemble upper part of G
+            sparseG2value[sparseMapG[e][i][j]] += Ge_2[i][j];   // Assemble middle of G
+            sparseG3value[sparseMapG[e][i][j]] += Ge_3[i][j];   // Assemble lower part of G
          }
       }
      
@@ -2834,14 +2813,14 @@ void step0()
 //   for (int i = 0; i < sparseM_NNZ/3; i++){
 //      cout << i+1 << "  " << sparseMrow[i]+1 << "  " << sparseMcol[i]+1 << "  " << sparseMvalue[i] << endl;
 //   }
-//   for (int i = 0; i < sparseM_NNZ; i++){
+//   for (int i = 0; i < sparseM_NNZ/3; i++){
 //      cout << i+1 << "  " << sparseKrow[i]+1 << "  " << sparseKcol[i]+1 << "  " << sparseKvalue[i] << endl;
 //   }
-//   for (int i = 0; i < sparseG_NNZ; i++){
-//      cout << i+1 << "  " << sparseGrow[i]+1 << "  " << sparseGcol[i]+1 << "  " << sparseGvalue[i] << endl;
+//   for (int i = 0; i < sparseG_NNZ/3; i++){
+//      cout << i+1 << "  " << sparseGrow[i]+1 << "  " << sparseGcol[i]+1 << "  " << sparseG1value[i] << "  " << sparseG2value[i] << "  " << sparseG3value[i] << endl;
 //   }
 
-   
+  
    // Find the diagonalized version of the upper-left sub mass matrix.
    int row;
    for (int i = 0; i < sparseM_NNZ/3; i++) {
@@ -2909,54 +2888,106 @@ void step0()
 
    waitForUser("OK00. Enter a character... ");
 
-   G_cs = cs_spalloc(3*NN, NNp, sparseG_NNZ, 1, 1);   // See page 12 of Tim Davis' book.                                                             // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
-                                                                                                                                                     //        To directly allocate this in CSC format we need column wise ordering info.
-   G_cs->i = sparseGrow;
-   G_cs->p = sparseGcol;
-   G_cs->x = sparseGvalue;
-   G_cs->nz = sparseG_NNZ;
+   G1_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 1, 1);   // See page 12 of Tim Davis' book.                                                            // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
+   G1_cs->i = sparseGrow;                                                                                                                            //        To directly allocate this in CSC format we need column wise ordering info.
+   G1_cs->p = sparseGcol;
+   G1_cs->x = sparseG1value;
+   G1_cs->nz = sparseG_NNZ/3;
+
+   G3_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 1, 1);
+   G3_cs->i = sparseGrow;
+   G3_cs->p = sparseGcol;
+   G3_cs->x = sparseG3value;
+   G3_cs->nz = sparseG_NNZ/3;
+
+   G2_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 1, 1);
+   G2_cs->i = sparseGrow;
+   G2_cs->p = sparseGcol;
+   G2_cs->x = sparseG2value;
+   G2_cs->nz = sparseG_NNZ/3;
 
    waitForUser("OK01. Enter a character... ");
 
-   G_cs_CSC = cs_compress(G_cs);             // Convert G from triplet format into compressed column format.
+   G1_cs_CSC = cs_compress(G1_cs);             // Convert G1 from triplet format into compressed column format.
+   G2_cs_CSC = cs_compress(G2_cs);
+   G3_cs_CSC = cs_compress(G3_cs);
 
    waitForUser("OK02. Enter a character... ");
 
-   Gt_cs_CSC = cs_transpose(G_cs_CSC, 1);    // Determine the transpose of G in compressed column format.
+   G1t_cs_CSC = cs_transpose(G1_cs_CSC, 1);    // Determine the transpose of G1 in compressed column format.
+   G2t_cs_CSC = cs_transpose(G2_cs_CSC, 1);
+   G3t_cs_CSC = cs_transpose(G3_cs_CSC, 1);
 
    //  CONTROL
-   //cs_print(G_cs_CSC, 0);
-   //cs_print(Gt_cs_CSC, 0);
+   //cs_print(G1_cs_CSC, 0);
+   //cs_print(G1t_cs_CSC, 0);
 
-   
    waitForUser("OK1. Enter a character... ");
 
    // Use CSparse library to calculate [Z] = dt^2 * transpose(G) * inv(Md) * G
 
-   // First calculate dummy = inv(Md) * G. It will have the same sparsity pattern with G, only the values will change.
+   // First calculate dummy = inv(Md) * G1. It will have the same sparsity pattern with G, only the values will change.
    double *dummyValues;
-   dummyValues = new double[sparseG_NNZ];
-   for (int i = 0; i < sparseG_NNZ; i++) {
-      dummyValues[i] = sparseGvalue[i] * MdOrigInv[sparseGrow[i]];
+   dummyValues = new double[sparseG_NNZ/3];
+   
+   for (int i = 0; i < sparseG_NNZ/3; i++) {
+      dummyValues[i] = sparseG1value[i] * MdOrigInv[sparseGrow[i]];
    }
    // Allocate the dummy matrix in CSparse triplet format
    cs *dummy_cs;
-   dummy_cs = cs_spalloc(3*NN, NNp, sparseG_NNZ, 0, 1);                                                                                              // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
+   dummy_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 0, 1);                                                                                               // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
    dummy_cs->i = sparseGrow;
    dummy_cs->p = sparseGcol;
    dummy_cs->x = dummyValues;
-   dummy_cs->nz = sparseG_NNZ;
-
-   waitForUser("OK11. Enter a character... ");
+   dummy_cs->nz = sparseG_NNZ/3;
 
    // Convert dummy matrix from triplet format to CSC format
    cs *dummy_cs_CSC;
    dummy_cs_CSC = cs_compress(dummy_cs);
 
-   waitForUser("OK2. Enter a character... ");
+   // Multiply transpose(G1) with the dummy matrix to get the 1st contribution to [Z].
+   Z_cs = cs_multiply(G1t_cs_CSC, dummy_cs_CSC);
 
-   // Multiply transpose(G) with the dummy matrix
-   Z_cs = cs_multiply(Gt_cs_CSC, dummy_cs_CSC);
+
+
+   for (int i = 0; i < sparseG_NNZ/3; i++) {
+      dummyValues[i] = sparseG2value[i] * MdOrigInv[sparseGrow[i]];
+   }
+   // Allocate the dummy matrix in CSparse triplet format
+   dummy_cs->x = dummyValues;
+
+   // Convert dummy matrix from triplet format to CSC format
+   dummy_cs_CSC = cs_compress(dummy_cs);
+
+   // Multiply transpose(G2) with the dummy matrix to get the second contribution to [Z].
+   cs *dummyZ_cs;
+   dummyZ_cs = cs_multiply(G2t_cs_CSC, dummy_cs_CSC);
+
+   // Add this dummyZ to the previously calculated Z
+   for(int i=0; i<Z_cs->nzmax; i++) {
+      Z_cs->x[i] = Z_cs->x[i] + dummyZ_cs->x[i];
+   }
+   cs_spfree(dummyZ_cs);
+
+   
+   
+   for (int i = 0; i < sparseG_NNZ/3; i++) {
+      dummyValues[i] = sparseG3value[i] * MdOrigInv[sparseGrow[i]];
+   }
+   // Allocate the dummy matrix in CSparse triplet format
+   dummy_cs->x = dummyValues;
+
+   // Convert dummy matrix from triplet format to CSC format
+   dummy_cs_CSC = cs_compress(dummy_cs);
+
+   // Multiply transpose(G3) with the dummy matrix to get the third contribution to [Z].
+   dummyZ_cs = cs_multiply(G3t_cs_CSC, dummy_cs_CSC);
+
+   // Add this dummyZ to the previously calculated Z
+   for(int i=0; i<Z_cs->nzmax; i++) {
+      Z_cs->x[i] = Z_cs->x[i] + dummyZ_cs->x[i];
+   }
+   cs_spfree(dummyZ_cs);
 
    waitForUser("OK21. Enter a character... ");
    
@@ -2967,10 +2998,12 @@ void step0()
    
    cs_spfree(dummy_cs_CSC);
 
+
    // Multiply the Z matrix with dt^2
    for(int i=0; i<Z_cs->nzmax; i++) {
       Z_cs->x[i] = Z_cs->x[i] * dt*dt;
    }
+
    //cs_print(Z_cs, 0);
 
    // Apply pressure BCs to [Z]
@@ -2991,7 +3024,7 @@ void step0()
 
    Z_chol = cs_chol(Z_cs, Z_sym);
 
-   //   cs_print(Z_chol->L, 0);
+   //cs_print(Z_chol->L, 0);
    //for (int i =0; i < Z_cs->m; i++) {
    //   cout << i << "   " << Z_sym->pinv[i] << endl;
    //}
@@ -3004,7 +3037,7 @@ void step0()
 
    // Deallocate memory
    delete[] Md;
-   delete[] MdOrigInv;
+   //delete[] MdOrigInv;
    cs_spfree(Z_cs);
 
 }  // End of function step0()
@@ -3019,7 +3052,7 @@ void step1(int iter)
 {
    // Executes step 1 of the method to determine the intermediate velocity.
 
-   // Calculate Ae and assemble into A. do this only for the first iteration of each time step.
+   // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
    if (iter == 1) {
 
       int nnzM = sparseM_NNZ / 3;
@@ -3035,7 +3068,7 @@ void step1(int iter)
       double **Ae_11;
       double GQfactor;
 
-      for (int i = 0; i < sparseM_NNZ; i++){
+      for (int i = 0; i < sparseM_NNZ/3; i++){
          sparseAvalue[i] = 0.0;
       }
 
@@ -3094,8 +3127,6 @@ void step1(int iter)
          for (int i = 0; i < NENv; i++) {
             for (int j = 0; j < NENv; j++) {
                sparseAvalue[sparseMapM[e][i][j]]         += Ae_11[i][j];   // Assemble upper left sub-matrix of A
-               sparseAvalue[sparseMapM[e][i][j] + nnzM]  += Ae_11[i][j];   // Assemble middle sub-matrix of A
-               sparseAvalue[sparseMapM[e][i][j] + nnzM2] += Ae_11[i][j];   // Assemble lower right sub-matrix of A
             }
          }
       }  // End of element loop
@@ -3111,12 +3142,9 @@ void step1(int iter)
       delete[] w0_nodal;
 
       //  CONTROL
-      //for (int i = 0; i < sparseM_NNZ; i++){
+      //for (int i = 0; i < sparseM_NNZ/3; i++){
       //   cout << i+1 << "  " << sparseMrow[i]+1 << "  " << sparseMcol[i]+1 << "  " << sparseAvalue[i] << endl;
       //}
-
-      //A_cs->x = sparseAvalue;
-      //A_cs_CSC = cs_compress(A_cs);             // Convert A from triplet format into compressed column format.
 
    }  // End of iter==1 check
 
@@ -3127,10 +3155,11 @@ void step1(int iter)
 
    char transa, matdescra[6];
    double alpha = -1.0;
-   double beta = 0.0;    // To add the calculated R1 to the previosuly calculated one.
-   int m = 3*NN;
+   double beta;
+   int m = NN;
    int k = NNp;
    int *pointerE;
+   int *pointerEsmall;
    int *pointerE2;
    pointerE = new int[m];
    pointerE2 = new int[m];
@@ -3149,13 +3178,43 @@ void step1(int iter)
       pointerE2[i] = sparseGrowStarts[i+1];  // A new form of rowStarts data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev, &beta, R1);   // This is (- K * UnpHalf_prev)  part of R1
-   beta = 1.0;    // To add the calculated R1 to the previosuly calculated one.
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev, &beta, R1);   // This is (- A * UnpHalf_prev)  part of R1
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R1);             // This is (- G * Pn          )  part of R1
+   double *UnpHalf_prev1, *UnpHalf_prev2, *UnpHalf_prev3;
+   UnpHalf_prev1 = new double[NN];
+   UnpHalf_prev2 = new double[NN];
+   UnpHalf_prev3 = new double[NN];
+   for (int i = 0; i < NN; i++) {
+      UnpHalf_prev1[i] = UnpHalf_prev[i];
+      UnpHalf_prev2[i] = UnpHalf_prev[i + NN];
+      UnpHalf_prev3[i] = UnpHalf_prev[i + 2*NN];
+   }
+
+
+   beta = 0.0;
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- K * UnpHalf_prev)  part of R1
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R1
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R1
+
+   
+   beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- A * UnpHalf_prev)  part of R1
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R1   
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R1
+
+
+   beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R11);            // This contributes to (- G * Pn)  part of R1
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R12);            // This contributes to (- G * Pn)  part of R1
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R13);            // This contributes to (- G * Pn)  part of R1
+   
+
+   for (int i = 0; i < NN; i++) {
+      R1[i]        = R11[i];
+      R1[i + NN]   = R12[i];
+      R1[i + 2*NN] = R13[i];
+   }
 
    // CONTROL
-   //for (int i = 0; i < m; i++) {
+   //for (int i = 0; i < 3*NN; i++) {
    //   cout << R1[i] << endl;
    //}
    
@@ -3178,6 +3237,10 @@ void step1(int iter)
    //   cout << UnpHalf[i] << endl;
    //}
 
+   delete[] UnpHalf_prev1;
+   delete[] UnpHalf_prev2;
+   delete[] UnpHalf_prev3;
+   
    delete[] pointerE;
    delete[] pointerE2;
 
@@ -3196,17 +3259,18 @@ void step2(int iter)
    // Calculate the RHS vector of step 2.
    // R2 = Gt * (UnpHalf - dt*dt * MdOrigInv * K * Acc_prev)
    
-   double *dummyR2;
-   dummyR2 = new double[3*NN];
+   double *dummy;
+   dummy = new double[3*NN];    // Stores (UnpHalf - dt*dt * MdOrigInv * K * Acc_prev)
    
    for (int i=0; i<3*NN; i++) {
-      dummyR2[i] = UnpHalf[i];
+      dummy[i] = UnpHalf[i];
    }
 
    
    char transa, matdescra[6];
    double alpha, beta;
-   int m = 3*NN;
+   int m = NN;
+   int k = NNp;
    int *pointerE;
    pointerE = new int[m];
 
@@ -3219,20 +3283,32 @@ void step2(int iter)
    if (iter != 1) {   // KtimesAcc_prev = 0. So skip this part
       double dt2 = dt*dt;
       for (int i = 0; i < 3*NN; i++) {
-         dummyR2[i] = dummyR2[i] - dt2 * MdOrigInv[i] * KtimesAcc_prev[i];
+         dummy[i] = dummy[i] - dt2 * MdOrigInv[i] * KtimesAcc_prev[i];
       }
    }
 
    alpha = 1.0;
-   beta = 0.0;
-   int k = NNp;
    transa = 't';    // Multiply using Gt, not G
       
    for (int i = 0; i < m; i++) {
       pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowStarts, pointerE, dummyR2, &beta, R2);   // This is (Gt * dummyR2) which gives R2
+   double *dummy1, *dummy2, *dummy3;
+   dummy1 = new double[NN];
+   dummy2 = new double[NN];
+   dummy3 = new double[NN];
+   for (int i = 0; i < NN; i++) {
+      dummy1[i] = dummy[i];
+      dummy2[i] = dummy[i + NN];
+      dummy3[i] = dummy[i + 2*NN];
+   }
+
+   beta = 0.0;
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE, dummy1, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   beta = 1.0;   // Add the results of the following Matrix-vector multiplication to R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE, dummy2, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE, dummy3, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
 
    // CONTROL
    //for (int i=0; i<NNp; i++) {
@@ -3274,7 +3350,10 @@ void step2(int iter)
    //   cout << Pnp1[i] << endl;
    //}
 
-   delete[] dummyR2;
+   delete[] dummy;
+   delete[] dummy1;
+   delete[] dummy2;
+   delete[] dummy3;
    delete[] pointerE;
 
 }  // End of function step2()
@@ -3295,7 +3374,8 @@ void step3(int iter)
    char transa, matdescra[6];
    double alpha = -dt;
    double beta = 0.0;
-   int m = 3*NN;
+   int m = NN;
+   int k = NNp;
    int *pointerE; 
    pointerE = new int[m];
 
@@ -3305,34 +3385,27 @@ void step3(int iter)
    matdescra[1] = 'u';
    matdescra[2] = 'n';
    matdescra[3] = 'c';
-
-   /*
-   if (iter != 1) {   // Skip this part for the first iteration because Acc_prev is zero for it.
-   
-      for (int i = 0; i < m; i++) {
-         pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-      };
-
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prev, &beta, R3);   // This is (-dt * K * Acc_prev)  part of R3.
-   }
-   */
-
-   if (iter != 1) {   // KtimesAcc_prev = 0. So skip this part
-      for (int i = 0; i < 3*NN; i++) {
-         R3[i] = - dt * KtimesAcc_prev[i];
-      }
-      beta = 1.0;     // Below, add to the previously calculated R3 if iter != 1.
-   } else {
-      beta = 0.0;     // Below, directly calculate R3 if iter == 1.
-   }
-
-   int k = NNp;
    
    for (int i = 0; i < m; i++) {
       pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
    };
 
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseGvalue, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R3);   // This is (-dt * G * Pdot) part of R3. It is added to the preiously calculated part if iter > 1.
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R31);            // This contributes to (- dt * G * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R32);            // This contributes to (- dt * G * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R33);            // This contributes to (- dt * G * Pdot)  part of R3
+
+   for (int i = 0; i < NN; i++) {
+      R3[i]        = R31[i];
+      R3[i + NN]   = R32[i];
+      R3[i + 2*NN] = R33[i];
+   }
+
+
+   if (iter != 1) {   // If iter = 1, KtimesAcc_prev = 0i so we can skip this part
+      for (int i = 0; i < 3*NN; i++) {
+         R3[i] = R3[i] - dt * KtimesAcc_prev[i];
+      }
+   }
 
    // CONTROL
    //for (int i=0; i<3*NN; i++) {
@@ -3503,6 +3576,7 @@ void readRestartFile()
 {
 
    // TODO ...
+   // See the end of thþs file for an earlier version
 
 }  // End of function readRestartFile()
 
@@ -3813,550 +3887,6 @@ void waitForUser(string str)
 
 /*
 
-
-//------------------------------------------------------------------------------
-void calcKeKMap()
-//------------------------------------------------------------------------------
-{
-   // This function calculates the KeKMap.
-   // KeKMap keeps elemental to global stiffness matrix's mapping data for all elements.
-
-
-   //-----------Ke to K map selection----------------------------
-   //KeKMap : costs memory([NE][NENv][NENv]*4byte), runs faster. (default)
-   //KeKMapSmall : negligible memory, runs slower. Steps to use;
-   //               (1) Comment out KeKMapUSE parts
-   //               (2) Uncomment KeKMapSmallUSE parts
-   //------------------------------------------------------------   
-   
-   //-----KeKMapUSE-----
-   int *eLtoG, loc, colCounter, k, e, i, j;   
-   
-   KeKMap = new int**[NE];                //Keeps elemental to global stiffness matrix's mapping data
-   for(e=0; e<NE; e++) {                  //It costs some memory([NE][NENv][NENv]*4byte) but makes assembly function runs faster.
-      KeKMap[e] = new int*[NENv];
-      for(j=0; j<NENv; j++) {
-         KeKMap[e][j] = new int[NENv];
-      }
-   }
-   
-   eLtoG = new int[NENv];           // elemental LtoG data    
-   
-   for(e=0; e<NE; e++) {
-
-      for(k=0; k<NENv; k++) {
-         eLtoG[k] = (LtoG[e][k]);      // Takes node data from LtoG
-      } 
-
-      for(i=0; i<NENv; i++) {
-         for(j=0; j<NENv; j++) {
-            colCounter=0;
-            for(loc=rowStartsSmall[eLtoG[i]]; loc<rowStartsSmall[eLtoG[i]+1]; loc++) {  // loc is the location of the col vector(col[x], loc=x) 
-               if(colSmall[loc] == eLtoG[j]) {                                         // Selection process of the KeKMapSmall data from the col vector
-                  KeKMap[e][i][j] = colCounter; 
-                  break;
-               }
-               colCounter++;
-            }
-         }
-      }   
-   }   // End of element loop 
-   
-   delete[] eLtoG;
-   //-----KeKMapUSE-----
-
-} // End of function calcKeKMap()
-
-
-
-
-
-
-//------------------------------------------------------------------------------
-void vectorProduct()
-//------------------------------------------------------------------------------
-{
-   // This function makes calculations for some matrix-vector operations on GPU
-   // Some operations at RHS of the mass-adjust velocity equations and
-   // some operations at RHS of the momentum equations.
-   // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c] [4e], [4f])   
-   
-   cusparseHandle_t handle = 0;
-   cusparseStatus_t status;
-   status = cusparseCreate(&handle);
-   if (status != CUSPARSE_STATUS_SUCCESS) {
-      fprintf( stderr, "!!!! CUSPARSE initialization error\n" );
-   }
-   cusparseMatDescr_t descr = 0;
-   status = cusparseCreateMatDescr(&descr); 
-   if (status != CUSPARSE_STATUS_SUCCESS) {
-      fprintf( stderr, "!!!! CUSPARSE cusparseCreateMatDescr error\n" );
-   } 
-
-   cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
-   cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
-   
-   cudaMalloc((void**)&d_col, (NNZ)*sizeof(int));
-   cudaMalloc((void**)&d_row, (NN+1)*sizeof(int));
-   cudaMalloc((void**)&d_val, (NNZ)*sizeof(real));
-   cudaMalloc((void**)&d_x, NN*sizeof(real));  
-   cudaMalloc((void**)&d_r, NN*sizeof(real));
-
-   cudaMemcpy(d_col, colSmall, (NNZ)*sizeof(int), cudaMemcpyHostToDevice);  
-   cudaMemcpy(d_row, rowStartsSmall, (NN+1)*sizeof(int), cudaMemcpyHostToDevice);  
-   
-   switch (vectorOperationNo) {
-   
-   case 1:
-      // Calculate part of a RHS of the momentum equations
-      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])
-      // f_x = - K_uv*v - K_uw*w   
-      // f_y = - K_vu*u - K_vw*w
-      // f_z = - K_wu*u - K_wv*v
-      cudaMalloc((void**)&d_rTemp, NN*sizeof(real));  
-   
-      switch (phase) {
-         case 0:
-            cudaMemcpy(d_val, K_uv, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);          
-            cudaMemcpy(d_x, v, NN*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-         case 1:
-            cudaMemcpy(d_val, K_vu, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);             
-            cudaMemcpy(d_x, u, NN*sizeof(real), cudaMemcpyHostToDevice);
-            break;
-         case 2:
-            cudaMemcpy(d_val, K_wu, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);  
-            cudaMemcpy(d_x, u, NN*sizeof(real), cudaMemcpyHostToDevice);
-            break;
-      }
-      
-      #ifdef SINGLE
-         cusparseScsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_rTemp);
-      #else
-         cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_rTemp);
-      #endif
-      
-      switch (phase) {
-         case 0:
-            cudaMemcpy(d_val, K_uw, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);           
-            cudaMemcpy(d_x, w, NN*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-         case 1:
-            cudaMemcpy(d_val, K_vw, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);  
-            cudaMemcpy(d_x, w, NN*sizeof(real), cudaMemcpyHostToDevice);
-            break;
-         case 2:
-            cudaMemcpy(d_val, K_wv, (NNZ)*sizeof(real), cudaMemcpyHostToDevice);  
-            cudaMemcpy(d_x, v, NN*sizeof(real), cudaMemcpyHostToDevice);
-            break;
-      }
-      
-      #ifdef SINGLE
-         cusparseScsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
-      #else
-         cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
-      #endif      
-      
-      #ifdef SINGLE
-         cublasSaxpy(NN,1.0,d_r,1,d_rTemp,1);
-      #else
-         cublasDaxpy(NN,1.0,d_r,1,d_rTemp,1);
-      #endif   
-      
-      // Calculate part of a RHS of the momentum equations
-      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])
-      // C_x * p^(i+1), C_y * p^(i+1), C_z * p^(i+1)
-      switch (phase) {
-         case 0:
-            cudaMemcpy(d_val, Cx, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-         case 1:
-            cudaMemcpy(d_val, Cy, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-         case 2:
-            cudaMemcpy(d_val, Cz, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-      }    
-      cudaMemcpy(d_x, p, NN*sizeof(real), cudaMemcpyHostToDevice);
-      
-      #ifdef SINGLE
-         cusparseScsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
-      #else
-         cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
-      #endif
-      
-      #ifdef SINGLE
-         cublasSaxpy(NN,-1.0,d_rTemp,1,d_r,1);
-      #else
-         cublasDaxpy(NN,-1.0,d_rTemp,1,d_r,1);
-      #endif  
-
-      cudaMemcpy(F,d_r,(NN)*sizeof(real),cudaMemcpyDeviceToHost);   
-      cudaFree(d_rTemp);      
-      break;
-      
-   case 2: 
-      // Calculating part of a RHS of the velocity correction
-      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c])      
-      // C_x * deltaP^(i+1/2), C_y * deltaP^(i+1/2), C_z * deltaP^(i+1/2)
-      switch (phase) {
-         case 0:
-            cudaMemcpy(d_val, Cx, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-         case 1:
-            cudaMemcpy(d_val, Cy, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-         case 2:
-            cudaMemcpy(d_val, Cz, (NNZ)*sizeof(real), cudaMemcpyHostToDevice); 
-            break;
-      }
-
-      cudaMemcpy(d_x, delta_p, NN*sizeof(real), cudaMemcpyHostToDevice);
-      
-      #ifdef SINGLE
-         cusparseScsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
-      #else
-         cusparseDcsrmv(handle,CUSPARSE_OPERATION_NON_TRANSPOSE,NN,NN,1.0,descr,d_val,d_row,d_col,d_x,0.0,d_r);
-      #endif      
-      cudaMemcpy(F,d_r,(NN)*sizeof(real),cudaMemcpyDeviceToHost);
-      break;
-   }      
-   
-   cudaFree(d_col);
-   cudaFree(d_row);
-   cudaFree(d_val);
-   cudaFree(d_x);
-   cudaFree(d_r);
-
-} // End of function vectorProduct()
-
-
-
-
-//------------------------------------------------------------------------------
-void solve()
-//------------------------------------------------------------------------------
-{
-   // This function is for nonlinear iterations
-   // Overall structure of the function;
-   // while(iteration number < maximum non-linear iterations)
-   //   calculate STEP 1 (solve SCPE for pressure correction, get delta_p)
-   //   calculate STEP 2 (mass-adjust velocity field and increment pressure, get u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i+1))
-   //   calculate STEP 3 (solve x, y, z momentum equations, get u^(i+1), v^(i+1), w^(i+1))
-   //   check convergence
-   //   print monitor points and other info
-   // end
-   //
-   // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a], [4b], [4c], [4d], [4e], [4f])      
-   
-   
-   
-   int i, j;
-   real temp;
-   real change, maxChange;
-   double Start2, End2, Start3, End3, Start4, End4, Start5, End5;  
-   
-   cout << endl << "SOLVING CYCLE STARTS...";
-   cout << endl << "============================================" << endl;   
-   
-   for (iter = 1; iter < nonlinearIterMax; iter++) {
-      Start5 = getHighResolutionTime();   
-      cout << endl << "ITERATION NO = " << iter << endl;
-      
-      // -----------------------S T A R T   O F   S T E P  1------------------------------------
-      // (1) solve SCPE for pressure correction delta(p)
-      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4a])   
-      Start2 = getHighResolutionTime();      
-      Start3 = getHighResolutionTime();     
-      
-      applyBC_p();
-      applyBC();  
-      
-      End3 = getHighResolutionTime();
-      printf("   Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);          
-      Start3 = getHighResolutionTime();   
-      
-      calcGlobalSys_p();
-      
-      End3 = getHighResolutionTime();
-      printf("   Time for calcGlobalSys for all      = %-.4g seconds.\n", End3 - Start3);   
-      
-      Start3 = getHighResolutionTime();         
-
-      for (i=0; i<NN; i++) {
-         K_u_diagonal[i] = 1.0/K_u_diagonal[i];
-         K_v_diagonal[i] = 1.0/K_v_diagonal[i];
-         K_w_diagonal[i] = 1.0/K_w_diagonal[i];
-      }
-      
-      End3 = getHighResolutionTime();
-      printf("   Time for taking inv of dia(K)       = %-.4g seconds.\n", End3 - Start3);   
-      
-      Start3 = getHighResolutionTime();         
-            
-      applyBC_p();
-      applyBC();      
-      End3 = getHighResolutionTime();
-      printf("   Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);    
-      
-      Start3 = getHighResolutionTime();           
-      #ifdef CG_CUDA
-         CUSP_pC_CUDA_CG();
-      #endif
-      #ifdef CR_CUDA
-         CUSP_pC_CUDA_CR();
-      #endif
-      #ifdef CG_CUSP
-         CUSP_pC_CUSP_CG();
-      #endif
-      #ifdef CR_CUSP
-         CUSP_pC_CUSP_CR();
-      #endif      
-      End3 = getHighResolutionTime();
-      printf("   Time for CUSP op's + CR solver      = %-.4g seconds.\n", End3 - Start3);      
-      
-      End2 = getHighResolutionTime();
-      printf("Total time for STEP 1         = %-.4g seconds.\n", End2 - Start2);           
-      cout << "STEP 1 is okay: delta(p)^(i+1/2) is calculated." << endl;
-      // delta(p)^(i+1/2) is calculated
-      // -------------------------E N D   O F   S T E P  1--------------------------------------
-      
-      
-      
-      // -----------------------S T A R T   O F   S T E P  2------------------------------------    
-      // (2) mass-adjust velocity field and increment pressure via [4b], [4c], [4d].
-      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c], [4d]) 
-      
-      Start2 = getHighResolutionTime();      
-      for (phase=0; phase<3; phase++) {    // Defines on which dimension(x, y, z) calculations takes place
-         vectorOperationNo = 2;
-         vectorProduct();   // Calculates C_x * deltaP^(i+1/2), C_y * deltaP^(i+1/2), C_z * deltaP^(i+1/2) at GPU according to phase.
-                            // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4b], [4c])
-                            
-         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
-            case 0:
-               for (i=0; i<NN; i++) {
-                  u[i] += K_u_diagonal[i]*F[i];   // Calculate u^(i+1/2)
-               }
-               break;
-            case 1:
-               for (i=0; i<NN; i++) {
-                  v[i] += K_v_diagonal[i]*F[i];   // Calculate v^(i+1/2)
-               } 
-               break;
-            case 2:
-               for (i=0; i<NN; i++) {
-                  w[i] += K_w_diagonal[i]*F[i];   // Calculate w^(i+1/2)
-               }  
-               break;
-         }
-         applyBC();
-      }   // End of phase loop
-      
-      for (i=0; i<NN; i++) {
-         p[i] = p[i] + (1.0-alpha[3]) * delta_p[i];   // Calculate p^(i+1)
-      }
-      
-      End2 = getHighResolutionTime();
-      printf("Total time for STEP 2         = %-.4g seconds.\n", End2 - Start2);         
-      cout << "STEP 2 is okay: u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i+1) are calculated." << endl;        
-      // u^(i+1/2), v^(i+1/2), w^(i+1/2) & p^(i+1) are calculated      
-      // -------------------------E N D   O F   S T E P  2--------------------------------------     
-
-      
-      
-      // -----------------------S T A R T   O F   S T E P  3------------------------------------ 
-      // Solve x, y and z momentum equations([4e], [4f]) for u, v, w
-      // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])       
-      
-      Start2 = getHighResolutionTime();
-      
-      for (phase=0; phase<3; phase++) {   // Defines on which dimension(x, y, z) calculations takes place
-         Start4 = getHighResolutionTime(); 
-         Start3 = getHighResolutionTime();  
-         calcGlobalSys_mom();
-         
-         switch (phase) {
-            case 0:
-               End3 = getHighResolutionTime();                  
-               printf("      Time for calcGlobalSys for x        = %-.4g seconds.\n", End3 - Start3); 
-               break;
-            case 1:
-               End3 = getHighResolutionTime();                  
-               printf("      Time for calcGlobalSys for y        = %-.4g seconds.\n", End3 - Start3); 
-               break;
-            case 2: 
-               End3 = getHighResolutionTime();                  
-               printf("      Time for calcGlobalSys for z        = %-.4g seconds.\n", End3 - Start3); 
-               break;
-         }
-         
-         Start3 = getHighResolutionTime();
-         applyBC_p();         
-         applyBC();
-         End3 = getHighResolutionTime();
-         printf("      Time for both applyBC's             = %-.4g seconds.\n", End3 - Start3);   
-
-         Start3 = getHighResolutionTime();           
-         vectorOperationNo = 1;
-         vectorProduct();   // Calculates f_u + C_x * p (@GPU) or f_v + C_y * p (@GPU) or f_w + C_z * p (@GPU) according to phase.
-                            // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e], [4f])     
-         End3 = getHighResolutionTime();
-         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
-            case 0:                 
-               printf("      Time for f_u + C_x * p (@GPU)       = %-.4g seconds.\n", End3 - Start3); 
-               break;
-            case 1:                 
-               printf("      Time for f_v + C_y * p (@GPU)       = %-.4g seconds.\n", End3 - Start3);     
-               break;
-            case 2:                
-               printf("      Time for f_w + C_z * p (@GPU)       = %-.4g seconds.\n", End3 - Start3);     
-               break;
-         }
-         
-         Start3 = getHighResolutionTime();
-         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
-            case 0:
-               for (i=0; i<NN; i++) {
-                  F[i]= (alpha[0]/(1.0-alpha[0]))*tempDiagonal[i]*u[i] + F[i]; // Calculates final values for RHS of the x-momentum equation
-               }                                                               // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4e])    
-               End3 = getHighResolutionTime();
-               printf("      Time for K_u(dia) * u + [C_x*p]     = %-.4g seconds.\n", End3 - Start3);                  
-               break;
-            case 1:
-               for (i=0; i<NN; i++) {
-                  F[i]= (alpha[1]/(1.0-alpha[1]))*tempDiagonal[i]*v[i] + F[i]; // Calculates final values for RHS of the y-momentum equation
-               }                                                               // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4f])  
-               End3 = getHighResolutionTime();
-               printf("      Time for K_v(dia) * v + [C_y*p]     = %-.4g seconds.\n", End3 - Start3);   
-               break;
-            case 2:
-               for (i=0; i<NN; i++) {
-                  F[i]= (alpha[2]/(1.0-alpha[2]))*tempDiagonal[i]*w[i] + F[i]; // Calculates final values for RHS of the x-momentum equation
-               }                                                               // (Segregated Finite Element Algorithms for the Numerical Solution of Large-Scale Incompressible Flow Problems, Vahe Horoutunian, [4f*])               
-               End3 = getHighResolutionTime();                                 // *Paper derives equations for two dimensions.
-               printf("      Time for K_w(dia) * w + [C_z*p]     = %-.4g seconds.\n", End3 - Start3);  
-               break;
-         }           
-
-         Start3 = getHighResolutionTime();   
-         applyBC();
-         End3 = getHighResolutionTime();
-         printf("      Time for both applyBC's             = %-.4g seconds.\n      ", End3 - Start3);   
-         
-         Start3 = getHighResolutionTime();     
-         #ifdef GMRES_CUSP
-            CUSP_GMRES(); // Non-sym, positive def
-         #endif
-         #ifdef BiCG_CUSP
-            CUSP_BiCG();  // Non-sym, positive def 
-         #endif
-         End3 = getHighResolutionTime();
-         printf("\n      Time for momentum eq solver         = %-.4g seconds.", End3 - Start3);     
-         switch (phase) {   // Defines on which dimension(x, y, z) calculations takes place
-            case 0:
-               cout << endl << "   x-momentum is solved." << endl; 
-               End4 = getHighResolutionTime();
-               printf("   Total time for solving x-momentum   = %-.4g seconds.\n", End4 - Start4);    
-               break;
-            case 1:  
-               cout << endl << "   y-momentum is solved." << endl; 
-               End4 = getHighResolutionTime();
-               printf("   Total time for solving y-momentum   = %-.4g seconds.\n", End4 - Start4);                   
-               break;
-            case 2: 
-               cout << endl << "   z-momentum is solved." << endl;
-               End4 = getHighResolutionTime();
-               printf("   Total time for solving z-momentum   = %-.4g seconds.\n", End4 - Start4);                   
-               break;
-         }
-      }   // End of phase loop
-      for (i=0; i<NN; i++) {
-         u[i] = u_temp[i];
-         v[i] = v_temp[i];
-         w[i] = w_temp[i];         
-      }   
-      
-      End2 = getHighResolutionTime();
-      printf("Total time for STEP 3         = %-.4g seconds.\n", End2 - Start2);         
-      cout << "STEP 3 is okay: u^(i+1), v^(i+1), w^(i+1) are calculated." << endl;
-      // Momentum equations are solved. u^(i+1), v^(i+1), w^(i+1) are calculated.
-      // -------------------------E N D   O F   S T E P  3--------------------------------------
-      
-      
-      
-      // Calculates maximum error/change for checking convergence.
-      Start2 = getHighResolutionTime();   
-      maxChange = abs(delta_p[0]);
-      
-      for (i=1; i<NN; i++) {
-         change = abs(delta_p[i]);
-         if (change > maxChange) {
-            maxChange = change;
-         }
-      }
-      
-      End2 = getHighResolutionTime();
-      
-      printf("Total time for calc maxChange = %-.4g seconds.\n", End2 - Start2);  
-      
-      End5 = getHighResolutionTime();      
-      
-      cout <<  " Iter |   Time(sec)   |  Max. Change  |    Mon u    |    Mon v    |    Mon w    |    Mon p  " << endl;
-      cout <<  "============================================================================================" << endl;        
-      printf("%5d %10.4g %19.5e", iter, End5 - Start5, maxChange);
-
-      if (nMonitorPoints > 0) {
-         printf("%11d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[0],
-                                                      u[monitorNodes[0]],
-                                                      u[monitorNodes[0] + NN],
-                                                      u[monitorNodes[0] + NN*2],
-                                                      u[monitorNodes[0] + NN*3]);
-         for (i=1; i<nMonitorPoints; i++) {
-            printf("%59d %14.4e %13.4e %13.4e %13.4e\n", monitorNodes[i],
-                                                         u[monitorNodes[i]],
-                                                         u[monitorNodes[i] + NN],
-                                                         u[monitorNodes[i] + NN*2],
-                                                         u[monitorNodes[i] + NN*3]);
-         } 
-      }
-      cout << endl;
-      
-      if (maxChange < nonlinearTol && iter > 1) {
-         for (phase=0; phase<3; phase++) {
-            applyBC();
-         }
-         applyBC_p();
-         break;
-      }
-      
-      // Write Tecplot file
-      if(iter % nDATiter == 0 || iter == nonlinearIterMax) {
-         writeTecplotFile();
-         // cout << "A DAT file is created for Tecplot." << endl;
-      }      
-        
-   }   // End of nonlinearIter loop
-   
-   
-   // Giving info about convergence
-   if (iter > nonlinearIterMax) { 
-      cout << endl << "Solution did not converge in " << nonlinearIterMax << " iterations." << endl; 
-   }
-   else {
-      cout << endl << "Convergence is achieved at " << iter << " iterations." << endl; 
-      writeTecplotFile();      
-   }
-
-}  // End of function solve()
-
-
-
-
-
-
-
-
 //------------------------------------------------------------------------------
 void readRestartFile()
 //------------------------------------------------------------------------------
@@ -4381,58 +3911,6 @@ void readRestartFile()
    restartFile.close();
    
 } // End of function readRestartFile()
-
-
-
-
-//------------------------------------------------------------------------------
-void writeTecplotFile()
-//------------------------------------------------------------------------------
-{
-   // Write the calculated unknowns to a Tecplot file
-   double x, y, z;
-   int i, e;
-
-   ostringstream dummy;
-   dummy << iter;
-   outputExtension = "_" + dummy.str() + ".dat";
-
-   datFile.open((whichProblem + outputExtension).c_str(), ios::out);
-   
-   datFile << "TITLE = " << whichProblem << endl;
-   datFile << "VARIABLES = X,  Y,  Z,  U, V, W, P" << endl;
-   
-   if (eType == 1) {
-      datFile << "ZONE N=" <<  NN  << " E=" << NE << " F=FEPOINT ET=QUADRILATERAL" << endl;
-      }        
-   else if (eType == 3) {
-      datFile << "ZONE NODES=" <<  NN  << ", ELEMENTS=" << NE << ", DATAPACKING=POINT, ZONETYPE=FEBRICK" << endl;   
-      }
-      else { 
-      datFile << "ZONE NODES=" <<  NN  << ", ELEMENTS=" << NE << ", DATAPACKING=POINT, ZONETYPE=FETETRAHEDRON" << endl;   
-      }
-
-   // Print the coordinates and the calculated values
-   for (i = 0; i<NN; i++) {
-      x = coord[i][0];
-      y = coord[i][1];
-      z = coord[i][2];  
-      datFile.precision(5);
-      datFile << scientific  << "\t" << x << " "  << y << " "  << z << " " << u[i] << " " << v[i] << " " << w[i] << " " << p[i] << endl;
-   }
-
-   // Print the connectivity list
-   for (e = 0; e<NE; e++) {
-      datFile << fixed << "\t";
-      for (i = 0; i<NENv; i++) {
-         // datFile.precision(5);
-         datFile << LtoG[e][i]+1 << " " ;
-      }
-      datFile<< endl;
-   }
-
-   datFile.close();
-} // End of function writeTecplotFile()
 
 */
 
