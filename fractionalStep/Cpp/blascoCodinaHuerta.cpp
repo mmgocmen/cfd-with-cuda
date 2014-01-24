@@ -1976,6 +1976,17 @@ void calcShape()
 
    double ksi, eta, zeta;
 
+   Sv = new double*[NGP];
+   for (int i=0; i<NGP; i++) {
+      Sv[i] = new double[NENv];
+   }
+
+   Sp = new double*[NGP];
+   for (int i=0; i<NGP; i++) {
+      Sp[i] = new double[NENp];
+   }
+
+/*
    Sv = new double*[NENv];
    for (int i=0; i<NENv; i++) {
       Sv[i] = new double[NGP];
@@ -1985,6 +1996,7 @@ void calcShape()
    for (int i=0; i<NENp; i++) {
       Sp[i] = new double[NGP];
    }
+*/
 
    dSv = new double**[3];
    for (int i=0; i<3; i++) {
@@ -2010,14 +2022,14 @@ void calcShape()
             eta  = GQpoint[k][1];
             zeta = GQpoint[k][2];
          
-            Sp[0][k] = 0.125*(1-ksi)*(1-eta)*(1-zeta);
-            Sp[1][k] = 0.125*(1+ksi)*(1-eta)*(1-zeta);
-            Sp[2][k] = 0.125*(1+ksi)*(1+eta)*(1-zeta);
-            Sp[3][k] = 0.125*(1-ksi)*(1+eta)*(1-zeta);
-            Sp[4][k] = 0.125*(1-ksi)*(1-eta)*(1+zeta);
-            Sp[5][k] = 0.125*(1+ksi)*(1-eta)*(1+zeta);
-            Sp[6][k] = 0.125*(1+ksi)*(1+eta)*(1+zeta);
-            Sp[7][k] = 0.125*(1-ksi)*(1+eta)*(1+zeta);
+            Sp[k][0] = 0.125*(1-ksi)*(1-eta)*(1-zeta);
+            Sp[k][1] = 0.125*(1+ksi)*(1-eta)*(1-zeta);
+            Sp[k][2] = 0.125*(1+ksi)*(1+eta)*(1-zeta);
+            Sp[k][3] = 0.125*(1-ksi)*(1+eta)*(1-zeta);
+            Sp[k][4] = 0.125*(1-ksi)*(1-eta)*(1+zeta);
+            Sp[k][5] = 0.125*(1+ksi)*(1-eta)*(1+zeta);
+            Sp[k][6] = 0.125*(1+ksi)*(1+eta)*(1+zeta);
+            Sp[k][7] = 0.125*(1-ksi)*(1+eta)*(1+zeta);
             
             // ksi derivatives of Sp
             dSp[0][0][k] = -0.125*(1-eta)*(1-zeta);
@@ -2062,38 +2074,38 @@ void calcShape()
             eta  = GQpoint[k][1];
             zeta = GQpoint[k][2];
          
-            Sv[0][k] = 0.125 * (ksi*ksi - ksi) * (eta*eta - eta) * (zeta*zeta - zeta);
-            Sv[1][k] = 0.125 * (ksi*ksi + ksi) * (eta*eta - eta) * (zeta*zeta - zeta);
-            Sv[2][k] = 0.125 * (ksi*ksi + ksi) * (eta*eta + eta) * (zeta*zeta - zeta);
-            Sv[3][k] = 0.125 * (ksi*ksi - ksi) * (eta*eta + eta) * (zeta*zeta - zeta);
-            Sv[4][k] = 0.125 * (ksi*ksi - ksi) * (eta*eta - eta) * (zeta*zeta + zeta);
-            Sv[5][k] = 0.125 * (ksi*ksi + ksi) * (eta*eta - eta) * (zeta*zeta + zeta);
-            Sv[6][k] = 0.125 * (ksi*ksi + ksi) * (eta*eta + eta) * (zeta*zeta + zeta);
-            Sv[7][k] = 0.125 * (ksi*ksi - ksi) * (eta*eta + eta) * (zeta*zeta + zeta);
+            Sv[k][0] = 0.125 * (ksi*ksi - ksi) * (eta*eta - eta) * (zeta*zeta - zeta);
+            Sv[k][1] = 0.125 * (ksi*ksi + ksi) * (eta*eta - eta) * (zeta*zeta - zeta);
+            Sv[k][2] = 0.125 * (ksi*ksi + ksi) * (eta*eta + eta) * (zeta*zeta - zeta);
+            Sv[k][3] = 0.125 * (ksi*ksi - ksi) * (eta*eta + eta) * (zeta*zeta - zeta);
+            Sv[k][4] = 0.125 * (ksi*ksi - ksi) * (eta*eta - eta) * (zeta*zeta + zeta);
+            Sv[k][5] = 0.125 * (ksi*ksi + ksi) * (eta*eta - eta) * (zeta*zeta + zeta);
+            Sv[k][6] = 0.125 * (ksi*ksi + ksi) * (eta*eta + eta) * (zeta*zeta + zeta);
+            Sv[k][7] = 0.125 * (ksi*ksi - ksi) * (eta*eta + eta) * (zeta*zeta + zeta);
          
-            Sv[8][k]  = 0.25 * (1 - ksi*ksi) * (eta*eta - eta) * (zeta*zeta - zeta);
-            Sv[9][k]  = 0.25 * (ksi*ksi + ksi) * (1 - eta*eta) * (zeta*zeta - zeta);
-            Sv[10][k] = 0.25 * (1 - ksi*ksi) * (eta*eta + eta) * (zeta*zeta - zeta);
-            Sv[11][k] = 0.25 * (ksi*ksi - ksi) * (1 - eta*eta) * (zeta*zeta - zeta);
+            Sv[k][8]  = 0.25 * (1 - ksi*ksi) * (eta*eta - eta) * (zeta*zeta - zeta);
+            Sv[k][9]  = 0.25 * (ksi*ksi + ksi) * (1 - eta*eta) * (zeta*zeta - zeta);
+            Sv[k][10] = 0.25 * (1 - ksi*ksi) * (eta*eta + eta) * (zeta*zeta - zeta);
+            Sv[k][11] = 0.25 * (ksi*ksi - ksi) * (1 - eta*eta) * (zeta*zeta - zeta);
          
-            Sv[12][k] = 0.25 * (ksi*ksi - ksi) * (eta*eta - eta) * (1 - zeta*zeta);
-            Sv[13][k] = 0.25 * (ksi*ksi + ksi) * (eta*eta - eta) * (1 - zeta*zeta);
-            Sv[14][k] = 0.25 * (ksi*ksi + ksi) * (eta*eta + eta) * (1 - zeta*zeta);
-            Sv[15][k] = 0.25 * (ksi*ksi - ksi) * (eta*eta + eta) * (1 - zeta*zeta);
+            Sv[k][12] = 0.25 * (ksi*ksi - ksi) * (eta*eta - eta) * (1 - zeta*zeta);
+            Sv[k][13] = 0.25 * (ksi*ksi + ksi) * (eta*eta - eta) * (1 - zeta*zeta);
+            Sv[k][14] = 0.25 * (ksi*ksi + ksi) * (eta*eta + eta) * (1 - zeta*zeta);
+            Sv[k][15] = 0.25 * (ksi*ksi - ksi) * (eta*eta + eta) * (1 - zeta*zeta);
          
-            Sv[16][k] = 0.25 * (1 - ksi*ksi) * (eta*eta - eta) * (zeta*zeta + zeta);
-            Sv[17][k] = 0.25 * (ksi*ksi + ksi) * (1 - eta*eta) * (zeta*zeta + zeta);
-            Sv[18][k] = 0.25 * (1 - ksi*ksi) * (eta*eta + eta) * (zeta*zeta + zeta);
-            Sv[19][k] = 0.25 * (ksi*ksi - ksi) * (1 - eta*eta) * (zeta*zeta + zeta);
+            Sv[k][16] = 0.25 * (1 - ksi*ksi) * (eta*eta - eta) * (zeta*zeta + zeta);
+            Sv[k][17] = 0.25 * (ksi*ksi + ksi) * (1 - eta*eta) * (zeta*zeta + zeta);
+            Sv[k][18] = 0.25 * (1 - ksi*ksi) * (eta*eta + eta) * (zeta*zeta + zeta);
+            Sv[k][19] = 0.25 * (ksi*ksi - ksi) * (1 - eta*eta) * (zeta*zeta + zeta);
          
-            Sv[20][k] = 0.5 * (1 - ksi*ksi) * (1 - eta*eta) * (zeta*zeta - zeta);
-            Sv[21][k] = 0.5 * (1 - ksi*ksi) * (eta*eta - eta) * (1 - zeta*zeta);
-            Sv[22][k] = 0.5 * (ksi*ksi + ksi) * (1 - eta*eta) * (1 - zeta*zeta);
-            Sv[23][k] = 0.5 * (1 - ksi*ksi) * (eta*eta + eta) * (1 - zeta*zeta);
-            Sv[24][k] = 0.5 * (ksi*ksi - ksi) * (1 - eta*eta) * (1 - zeta*zeta);
-            Sv[25][k] = 0.5 * (1 - ksi*ksi) * (1 - eta*eta) * (zeta*zeta + zeta);
+            Sv[k][20] = 0.5 * (1 - ksi*ksi) * (1 - eta*eta) * (zeta*zeta - zeta);
+            Sv[k][21] = 0.5 * (1 - ksi*ksi) * (eta*eta - eta) * (1 - zeta*zeta);
+            Sv[k][22] = 0.5 * (ksi*ksi + ksi) * (1 - eta*eta) * (1 - zeta*zeta);
+            Sv[k][23] = 0.5 * (1 - ksi*ksi) * (eta*eta + eta) * (1 - zeta*zeta);
+            Sv[k][24] = 0.5 * (ksi*ksi - ksi) * (1 - eta*eta) * (1 - zeta*zeta);
+            Sv[k][25] = 0.5 * (1 - ksi*ksi) * (1 - eta*eta) * (zeta*zeta + zeta);
 
-            Sv[26][k] = (1 - ksi*ksi) * (1 - eta*eta) * (1 - zeta*zeta);
+            Sv[k][26] = (1 - ksi*ksi) * (1 - eta*eta) * (1 - zeta*zeta);
 
             // ksi derivatives of Sv
             dSv[0][0][k] = 0.125 * (2*ksi - 1) * (eta*eta - eta) * (zeta*zeta - zeta);
@@ -2260,6 +2272,16 @@ void calcJacob()
    gDSp = new double***[NE];
 
    for (int i = 0; i < NE; i++) {
+      gDSp[i] = new double**[NGP];
+      for(int j = 0; j < NGP; j++) {
+         gDSp[i][j] = new double*[NENp];     
+         for(int k = 0; k < NENp; k++) {
+            gDSp[i][j][k] = new double[3];
+         }
+      }	
+   }
+/*
+   for (int i = 0; i < NE; i++) {
       gDSp[i] = new double**[3];
       for(int j = 0; j < 3; j++) {
          gDSp[i][j] = new double*[NENp];     
@@ -2268,9 +2290,20 @@ void calcJacob()
          }
       }	
    }
-      
+*/
+
    gDSv = new double***[NE];
 
+   for (int i = 0; i < NE; i++) {
+      gDSv[i] = new double**[NGP];
+      for(int j = 0; j < NGP; j++) {
+         gDSv[i][j] = new double*[NENv];
+         for(int k = 0; k < NENv; k++) {
+            gDSv[i][j][k] = new double[3];
+         }
+      }
+   }
+/*
    for (int i = 0; i < NE; i++) {
       gDSv[i] = new double**[3];
       for(int j = 0; j < 3; j++) {
@@ -2278,8 +2311,9 @@ void calcJacob()
          for(int k = 0; k < NENv; k++) {
             gDSv[i][j][k] = new double[NGP];
          }
-      }	
-   }      
+      }
+   }
+*/
 
    for (int e = 0; e < NE; e++){
       // Find e_ccord, coordinates for NEC corners of element e.
@@ -2334,7 +2368,8 @@ void calcJacob()
                for (int m = 0; m < 3; m++) { 
                   sum = sum + invJacob[i][m] * dSp[m][j][k];
                }
-               gDSp[e][i][j][k] = sum;
+               //gDSp[e][i][j][k] = sum;
+               gDSp[e][k][j][i] = sum;
             }
          }
 
@@ -2344,7 +2379,8 @@ void calcJacob()
                for (int m = 0; m < 3; m++) { 
                   sum = sum + invJacob[i][m] * dSv[m][j][k];
                }
-               gDSv[e][i][j][k] = sum;
+               //gDSv[e][i][j][k] = sum;
+               gDSv[e][k][j][i] = sum;
             }
          }
 
@@ -2365,9 +2401,9 @@ void calcJacob()
    
    /*  CONTROL
    for (int e = 0; e < 1; e++){
-      for (int i = 0; i < 3; i++){
+      for (int i = 0; i < NGP; i++){
          for (int j = 0; j < NENv; j++) {
-            for (int k = 0; k < NGP; k++) {
+            for (int k = 0; k < 3; k++) {
                cout << e << "  " << i << "  " << j << "  "  << k << "  " << gDSv[e][i][j][k] << endl;
             }
          }
@@ -2757,18 +2793,26 @@ void step0()
        
          for (int i = 0; i < NENv; i++) {
             for (int j = 0; j < NENv; j++) {
-               Me_11[i][j] = Me_11[i][j] + Sv[i][k] * Sv[j][k] * GQfactor;
-               Ke_11[i][j] = Ke_11[i][j] + viscosity * (gDSv[e][0][i][k] * gDSv[e][0][j][k] +
-                                                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-                                                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) * GQfactor;
+               Me_11[i][j] = Me_11[i][j] + Sv[k][i] * Sv[k][j] * GQfactor;
+//               Ke_11[i][j] = Ke_11[i][j] + viscosity * (gDSv[e][0][i][k] * gDSv[e][0][j][k] +
+//                                                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
+//                                                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) * GQfactor;
+
+               Ke_11[i][j] = Ke_11[i][j] + viscosity * (gDSv[e][k][i][0] * gDSv[e][k][j][0] +
+                                                        gDSv[e][k][i][1] * gDSv[e][k][j][1] +
+                                                        gDSv[e][k][i][2] * gDSv[e][k][j][2]) * GQfactor;
             }
          }
 
          for (int i = 0; i < NENv; i++) {
             for (int j = 0; j < NENp; j++) {
-               Ge_1[i][j] = Ge_1[i][j] - Sp[j][k] * gDSv[e][0][i][k] * GQfactor;
-               Ge_2[i][j] = Ge_2[i][j] - Sp[j][k] * gDSv[e][1][i][k] * GQfactor;
-               Ge_3[i][j] = Ge_3[i][j] - Sp[j][k] * gDSv[e][2][i][k] * GQfactor;
+//               Ge_1[i][j] = Ge_1[i][j] - Sp[j][k] * gDSv[e][0][i][k] * GQfactor;
+//               Ge_2[i][j] = Ge_2[i][j] - Sp[j][k] * gDSv[e][1][i][k] * GQfactor;
+//               Ge_3[i][j] = Ge_3[i][j] - Sp[j][k] * gDSv[e][2][i][k] * GQfactor;
+
+               Ge_1[i][j] = Ge_1[i][j] - Sp[k][j] * gDSv[e][k][i][0] * GQfactor;
+               Ge_2[i][j] = Ge_2[i][j] - Sp[k][j] * gDSv[e][k][i][1] * GQfactor;
+               Ge_3[i][j] = Ge_3[i][j] - Sp[k][j] * gDSv[e][k][i][2] * GQfactor;
             }
          }
        
@@ -3110,14 +3154,15 @@ void step1(int iter)
             v0 = 0.0;
             w0 = 0.0;
             for (int i = 0; i<NENv; i++) {
-               u0 = u0 + Sv[i][k] * u0_nodal[i];
-               v0 = v0 + Sv[i][k] * v0_nodal[i];
-               w0 = w0 + Sv[i][k] * w0_nodal[i];
+               u0 = u0 + Sv[k][i] * u0_nodal[i];
+               v0 = v0 + Sv[k][i] * v0_nodal[i];
+               w0 = w0 + Sv[k][i] * w0_nodal[i];
             }
        
             for (int i = 0; i < NENv; i++) {
                for (int j = 0; j < NENv; j++) {
-                  Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) * Sv[i][k] * GQfactor;
+//                  Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) * Sv[i][k] * GQfactor;
+                  Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][k][j][0] + v0 * gDSv[e][k][j][1] + w0 * gDSv[e][k][j][2]) * Sv[k][i] * GQfactor;
                }
             }       
          } // GQ loop
