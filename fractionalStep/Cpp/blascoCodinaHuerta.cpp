@@ -1499,10 +1499,11 @@ void setupSparseM()
                       // Stores similar information as NZcolsInARow, but makes counting nonzeros easier.
    isColNZ = new int[NN];
 
-   for (int r = 0; r < NN; r++) {   // Loop over all rows                                                                                            // TODO : This loop takes too much time
-      for (int i = 0; i < NN; i++) {
-         isColNZ[i] = 0;
-      }
+   for (int i = 0; i < NN; i++) {
+      isColNZ[i] = 0;
+   }
+
+   for (int r = 0; r < NN; r++) {   // Loop over all rows
       colCount = 0;
   
       for (int i = 0; i < NelemOfVelNodes[r]; i++) {   // NelemOfVelNodes[r] is the number of elements connected to node r
@@ -1518,6 +1519,11 @@ void setupSparseM()
   
       NNZcolInARow[r] = colCount;
       sparseM_NNZ_onePart = sparseM_NNZ_onePart + colCount;
+
+      // Get ready for the next row. Set non-zero values of isColNZ to zero.
+      for (int i = 0; i < NNZcolInARow[r]; i++) {
+         isColNZ[ NZcolsInARow[r][i] ]  = 0;
+      }
    }
 
    delete[] isColNZ;
@@ -1725,10 +1731,11 @@ void setupSparseG()
                       // Stores similar information as NZcolsInARow, but makes counting nonzeros easier.
    isColNZ = new int[NNp];
 
+   for (int i = 0; i < NNp; i++) {
+      isColNZ[i] = 0;
+   }
+   
    for (int r = 0; r < NN; r++) {   // Loop over all rows
-      for (int i = 0; i < NNp; i++) {
-         isColNZ[i] = 0;
-      }
       colCount = 0;
   
       for (int i = 0; i < NelemOfVelNodes[r]; i++) {   // NelemOfVelNodes[r] is the number of elements connected to node r
@@ -1744,6 +1751,11 @@ void setupSparseG()
   
       NNZcolInARow[r] = colCount;
       sparseG_NNZ_onePart = sparseG_NNZ_onePart + colCount;
+
+      // Get ready for the next row. Set non-zero values of isColNZ to zero.
+      for (int i = 0; i < NNZcolInARow[r]; i++) {
+         isColNZ[ NZcolsInARow[r][i] ]  = 0;
+      }
    }
 
    delete[] isColNZ;
