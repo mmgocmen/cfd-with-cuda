@@ -18,13 +18,6 @@
 
 #include <stdio.h>
 
-#ifdef WIN32
-   #include <time.h>
-#else
-   #include <sys/time.h>
-   #define CLOCKS_PER_SEC 1.0
-#endif // WIN32
-
 #include <string>
 #include <iostream>
 #include <iomanip>
@@ -46,6 +39,12 @@
 // #include <cusparse.h>
 // #include <cublas.h>
 
+#ifdef WIN32
+   #include <time.h>
+#else
+   #include <sys/time.h>
+#endif // WIN32
+
 extern "C" {      // Timothy Davis' CSparse library
 #include "cs.h"
 }
@@ -57,8 +56,6 @@ using namespace std;
 #else                      // behavior is to use double precision.
   typedef double real;
 #endif
-
-
 
 
 //========================================================================
@@ -224,7 +221,7 @@ double *R31, *R32, *R33;
 // Functions
 //========================================================================
 void readInputFile();
-double getHighResolutionTime();
+double getHighResolutionTime(int, double);
 void findElemNeighbors();
 void setupNonCornerNodes();
 void setupLtoGdof();
@@ -250,8 +247,6 @@ void applyBC_Step1(int);
 void applyBC_Step2(int);
 void applyBC_Step3();
 void waitForUser(string);
-
-
 
 /*
 // Pressure correction equation solvers
@@ -295,107 +290,103 @@ int main()
 
    waitForUser("Just started. Enter a character... ");
    
-   double Start, End, Start1, End1;       // Used for run time measurement.
+   double Start, Start1, wallClockTime;       // Used for run time measurement.
 
-   Start1 = getHighResolutionTime();   
+   Start1 = getHighResolutionTime(1, 1.0);
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    readInputFile();                       // Read the input file.
-   End = getHighResolutionTime();
-   printf("readInputFile()        took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("readInputFile()        took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    findElemsOfPresNodes();                // Finds elements that are connected to each pressure node.
-   End = getHighResolutionTime();
-   printf("findElemsOfPresNodes() took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("findElemsOfPresNodes() took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    findElemNeighbors();                   // Finds neighbors of all elements.
-   End = getHighResolutionTime();
-   printf("findElemNeighbors()    took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("findElemNeighbors()    took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    setupNonCornerNodes();                 // Find non-corner nodes, add them to LtoGnode and calculate their coordinates.
-   End = getHighResolutionTime();
-   printf("setupNonCornerNodes()  took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("setupNonCornerNodes()  took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    setupLtoGdof();                        // Creates LtoGvel and LtoGpres using LtoGnode.
-   End = getHighResolutionTime();
-   printf("setupLtoGdof()         took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("setupLtoGdof()         took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    determineVelBCnodes();                 // Converts face-based velocity BC data into a node-based format.
-   End = getHighResolutionTime();
-   printf("determineVelBCnodes()  took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("determineVelBCnodes()  took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    findElemsOfVelNodes();                 // Finds elements that are connected to each velocity node.
-   End = getHighResolutionTime();
-   printf("findElemsOfVelNodes()  took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("findElemsOfVelNodes()  took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    findMonitorPoint();                    // Finds the node that is closest to the monitor point coordinates.
-   End = getHighResolutionTime();
-   printf("findMonitorPoint()     took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("findMonitorPoint()     took  %8.3f seconds.\n", wallClockTime);
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    setupSparseM();                        // Finds the sparsity pattern of the Mass matrix.
-   End = getHighResolutionTime();
-   printf("setupSparseM()         took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("setupSparseM()         took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    setupSparseG();                        // Finds the sparsity pattern of the G matrix.
-   End = getHighResolutionTime();
-   printf("setupSparseG()         took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("setupSparseG()         took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    setupGQ();                             // Sets up GQ points and weights.
-   End = getHighResolutionTime();
-   printf("setupGQ()              took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("setupGQ()              took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    calcShape();                           // Calculates shape functions and their derivatives at GQ points.
-   End = getHighResolutionTime();
-   printf("calcShape()            took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("calcShape()            took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    calcJacob();                           // Calculates the determinant of the Jacobian and global shape function derivatives at each GQ point.
-   End = getHighResolutionTime();
-   printf("calcJacob()            took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("calcJacob()            took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   //Start = getHighResolutionTime();
    timeLoop();                           // Main solution loop.
-   //End = getHighResolutionTime();
-   //printf("timeLoop()            took  %8.3f seconds.\n", End - Start);
-
    
-   End1 = getHighResolutionTime();
-   printf("\nTotal run            took  %8.3f seconds.\n", (End1 - Start1) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start1);
+   printf("\nTotal run            took  %8.3f seconds.\n", wallClockTime);
    
    cout << endl << "The program is terminated successfully.\n\n\n";
 
@@ -2551,7 +2542,7 @@ void timeLoop()
 {
    // Main time loop of the solution.
 
-   double Start, End;
+   double Start, wallClockTime;
    int iter;
 
    // Initialize the solution using the specified initial condition and do
@@ -2560,10 +2551,10 @@ void timeLoop()
 
 
    // Calculate certain matrices and their inverses only once before the time loop.
-   Start = getHighResolutionTime();
+   Start = getHighResolutionTime(1, 1.0);
    step0();
-   End = getHighResolutionTime();
-   printf("step0()               took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("step0()               took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
@@ -2593,26 +2584,26 @@ void timeLoop()
       // Iterations inside a time step
       for (iter = 1; iter <= maxIter; iter++) {
          // Calculate intermediate velocity.
-         Start = getHighResolutionTime();
+         Start = getHighResolutionTime(1, 1.0);
          step1(iter);
-         End = getHighResolutionTime();
-         printf("step1()               took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+         wallClockTime = getHighResolutionTime(2, Start);
+         printf("step1()               took  %8.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
          // Calculate pressure of the new time step
-         Start = getHighResolutionTime();
+         Start = getHighResolutionTime(1, 1.0);
          step2(iter);
-         End = getHighResolutionTime();
-         printf("step2()               took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+         wallClockTime = getHighResolutionTime(2, Start);
+         printf("step2()               took  %8.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
          // Calculate velocity of the new time step
-         Start = getHighResolutionTime();
+         Start = getHighResolutionTime(1, 1.0);
          step3(iter);
-         End = getHighResolutionTime();
-         printf("step3()               took  %8.3f seconds.\n", (End - Start) / CLOCKS_PER_SEC);
+         wallClockTime = getHighResolutionTime(2, Start);
+         printf("step3()               took  %8.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
        
@@ -3216,7 +3207,6 @@ void step1(int iter)
    int m = NN;
    int k = NNp;
    int *pointerE;
-   int *pointerEsmall;
    int *pointerE2;
    pointerE = new int[m];
    pointerE2 = new int[m];
@@ -3633,7 +3623,7 @@ void readRestartFile()
 {
 
    // TODO ...
-   // See the end of thþs file for an earlier version
+   // See the end of this file for an earlier version
 
 }  // End of function readRestartFile()
 
@@ -3882,21 +3872,35 @@ void createTecplot()
 
 
 //-----------------------------------------------------------------------------
-double getHighResolutionTime(void)
+double getHighResolutionTime(int flag, double start)
 //-----------------------------------------------------------------------------
 {
+   // If flag is 1 return the current time (start value is not used).
+   // If flag is 2 return the current time minus the start value, i.e. return an elapsed time.
+
    #ifdef WIN32
       // Windows
-      return double(clock());    // On Windows, clock() returns wall clock time.
-                                 // On Linux it returns CPU time.
+      if (flag == 1) {
+         return double(clock());    // On Windows, clock() returns wall clock time.
+                                    // On Linux it returns CPU time.
+      } else {
+         return ( double(clock()) - start ) / CLOCKS_PER_SEC;
+      }
+      
    #else
       // Linux
       struct timeval tod;
 
       gettimeofday(&tod, NULL);  // Measures wall clock time
       double time_seconds = (double) tod.tv_sec + ((double) tod.tv_usec / 1000000.0);
-      return time_seconds;
+
+      if (flag == 1) {
+         return time_seconds;
+      } else {
+         return (time_seconds - start);
+      }
    #endif // WIN32
+
 } // End of function getHighResolutionTime()
 
 
@@ -3910,7 +3914,7 @@ void waitForUser(string str)
    // Used for checking memory usage. Prints the input string to the screen and
    // waits for the user to enter a character.
 
-   char dummyUserInput;
+   //char dummyUserInput;
    //cout << str;
    //cin >> dummyUserInput;
 }
