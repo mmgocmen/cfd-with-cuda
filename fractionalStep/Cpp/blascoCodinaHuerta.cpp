@@ -7,7 +7,7 @@
 *        This code is a part of the CFD-with-CUDA project        *
 *             http://code.google.com/p/cfd-with-cuda             *
 *                                                                *
-*              Dr. Cuneyt Sert and Mahmut M. Gocmen              *
+*                        Dr. Cuneyt Sert                         *
 *                                                                *
 *              Department of Mechanical Engineering              *
 *                Middle East Technical University                *
@@ -17,7 +17,6 @@
 *****************************************************************/
 
 #include <stdio.h>
-
 #include <string>
 #include <iostream>
 #include <iomanip>
@@ -29,6 +28,7 @@
 #include <vector>
 #include "mkl_types.h"
 #include "mkl_spblas.h"
+#include "mkl_service.h"
 //#include <mkl.h>
 //#include <cusp/coo_matrix.h>
 //#include <cusp/multiply.h>
@@ -39,11 +39,11 @@
 // #include <cusparse.h>
 // #include <cublas.h>
 
-#ifdef WIN32
+#ifdef WINDOWS
    #include <time.h>
 #else
    #include <sys/time.h>
-#endif // WIN32
+#endif // WINDOWS
 
 extern "C" {      // Timothy Davis' CSparse library
 #include "cs.h"
@@ -51,7 +51,7 @@ extern "C" {      // Timothy Davis' CSparse library
 
 using namespace std;
 
-#ifdef SINGLE              // Many major parameters can automatically be defined as                                                                  TODO: This is not used in the code.
+#ifdef SINGLE              // Many major parameters can automatically be defined as                                                                  TODO: Use "real" throughout the code.
   typedef float real;      // float by using -DSINGLE during compilcation. Default
 #else                      // behavior is to use double precision.
   typedef double real;
@@ -62,11 +62,12 @@ using namespace std;
 // Global Variables
 //========================================================================
 
-ifstream inpFile;           // Input file with INP extension.
-ifstream problemNameFile;   // Input file name is read from this ProblemName.txt file.
-ofstream datFile;           // Output file with DAT extension.
-//ofstream outputControl;     // Used for debugging.
-//ofstream outFile;           // Output file to examine results.
+ifstream inpFile;            // Input file with INP extension.
+ifstream problemNameFile;    // Input file name is read from this ProblemName.txt file.
+ofstream datFile;            // Output file with DAT extension.
+//ofstream outputControl;    // Used for debugging.
+//ofstream outFile;          // Output file to examine results.
+FILE *ZcholFile;             // Cholesky factorization details of [Z] are written to (and read from) this file.
 
 string whichProblem;
 //string problemName      = "ProblemName.txt";
@@ -101,7 +102,7 @@ double density;    // Density of the material
 double viscosity;  // Viscosity of the material                                                                                                      TODO: Kinematic or dynamic?
 double fx, fy, fz; // Body force components
 
-double alpha;      //                                                                                                                                TODO : Read from the input file, but not used
+double alpha;      //                                                                                                                                TODO: Read from the input file, but not used
 
 int    NEC;        // Number of element corners
 int    NEF;        // Number of element faces
@@ -158,32 +159,31 @@ cs *G1t_cs_CSC, *G2t_cs_CSC, *G3t_cs_CSC;                         // CSparse sto
 
 double *KtimesAcc_prev; // [K]{Acc_prev}.
 
+
+// These are used when Cholesky factorization of [Z] is first calculated and written to a file.
 cs *Z_cs;               // [Z] matrix.
 css *Z_sym;             // Symbolic analysis of [Z] using the CSparse library. Will be calculated in step0, and used in step2.
 csn *Z_chol;            // Cholesky factorization of [Z] using the CSparse library. Will be calculated in step0, and used in step2.
 
+// These are used cholesky factorization of [Z] is read from a file.
+cs *Z_chol_L;           // Lower part of Cholesky factorization of [Z].
+int *Z_chol_Lp, *Z_chol_Li;
+double *Z_chol_Lx;
+int *Z_sym_pinv;
 
 int ***sparseMapM;      // Maps each element's local M, K, A entries to the global ones that are stored in sparse format.
 int ***sparseMapG;      // Maps each element's local G entries to the global ones that are stored in sparse format.
 
-
-
 double **GQpoint, *GQweight; // GQ points and weights.
 
+double **Sp;              // Shape functions for pressure evaluated at GQ points. (size:NENpxNGP)
+double ***dSp;            // Derivatives of shape functions for pressure wrt to ksi, eta & zeta evaluated at GQ points. (size:NENpxNGP)
+double **Sv;              // Shape functions for velocity evaluated at GQ points. (size:NENvxNGP) 
+double ***dSv;            // Derivatives of shape functions for velocity wrt to ksi, eta & zeta evaluated at GQ points. (size:NENvxNGP)
 
-
-double **Sp;       // Shape functions for pressure evaluated at GQ points. (size:NENpxNGP)
-double ***dSp;     // Derivatives of shape functions for pressure wrt to ksi, eta & zeta evaluated at GQ points. (size:NENpxNGP)
-double **Sv;       // Shape functions for velocity evaluated at GQ points. (size:NENvxNGP) 
-double ***dSv;     // Derivatives of shape functions for velocity wrt to ksi, eta & zeta evaluated at GQ points. (size:NENvxNGP)
-
-
-
-double **detJacob; // Determinant of the Jacobian matrix evaluated at a certain (ksi, eta, zeta)
-double ****gDSp;   // Derivatives of shape functions for pressure wrt x, y & z at GQ points. (size:3xNENvxNGP)
-double ****gDSv;   // Derivatives of shape functions for velocity wrt x, y & z at GQ points. (size:3xNENvxNGP)
-
-
+double **detJacob;        // Determinant of the Jacobian matrix evaluated at a certain (ksi, eta, zeta)
+double ****gDSp;          // Derivatives of shape functions for pressure wrt x, y & z at GQ points. (size:3xNENvxNGP)
+double ****gDSv;          // Derivatives of shape functions for velocity wrt x, y & z at GQ points. (size:3xNENvxNGP)
 
 double *Un;               // x, y and z velocity components of time step n.
 double *Unp1;             // U_i+1^n+1 of the reference paper.
@@ -211,7 +211,7 @@ double *R2;               // RHS vector of pressure calculation.
 double *R3;               // RHS vector of new velocity calculation.
 double *R31, *R32, *R33;
 
-//int nDATiter;        // Period of saving results.
+//int nDATiter;           // Period of saving results.
 //int nMonitorPoints;     // Number of monitor points.
 
 
@@ -239,6 +239,9 @@ void readRestartFile();
 void createTecplot();
 void timeLoop();
 void step0();
+void calculateZandZchol();
+void writeZcholToFile();
+void readZcholFromFile();
 void step1(int);
 void step2(int);
 void step3(int);
@@ -247,31 +250,6 @@ void applyBC_Step1(int);
 void applyBC_Step2(int);
 void applyBC_Step3();
 void waitForUser(string);
-
-/*
-// Pressure correction equation solvers
-#ifdef CG_CUDA
-   extern void CUSP_pC_CUDA_CG();
-#endif
-#ifdef CR_CUDA
-   extern void CUSP_pC_CUDA_CR();
-#endif
-#ifdef CG_CUSP
-   extern void CUSP_pC_CUSP_CG();
-#endif
-#ifdef CR_CUSP
-   extern void CUSP_pC_CUSP_CR();
-#endif
-
-// Momentum equation solvers
-#ifdef GMRES_CUSP
-   extern void CUSP_GMRES();
-#endif
-#ifdef BiCG_CUSP
-   extern void CUSP_BiCG();
-#endif
-
-*/
 
 
 
@@ -285,10 +263,14 @@ int main()
    cout << "\n*    3D Unsteady Incompressible Navier-Stokes Solver    *";
    cout << "\n*        Formulation of Blasco, Codina & Huerta         *";
    cout << "\n*            Part of CFD with CUDA project              *";
+   cout << "\n*                    Dr. Cuneyt Sert                    *";
    cout << "\n*        http://code.google.com/p/cfd-with-cuda         *";
    cout << "\n*********************************************************\n\n";
 
    waitForUser("Just started. Enter a character... ");
+
+   mkl_set_dynamic(0);
+   mkl_set_num_threads(1);
    
    double Start, Start1, wallClockTime;       // Used for run time measurement.
 
@@ -604,7 +586,7 @@ void readInputFile()                                                            
    }
 
    // CONTROL
-   cout << endl << "NNp = " << NNp << endl;
+   cout << endl << "                                                  NNp = " << NNp << endl;
    
 } // End of function readInputFile()
 
@@ -1047,8 +1029,8 @@ void setupNonCornerNodes()
    NN = nodeCount;
 
    // CONTROL
-   cout << "NN = " << NN << endl;
-   
+   cout << "                                                  NN = " << NN << endl;
+
    //for (int e=0; e<NE; e++) {
    //   for(int i=0; i<NENv; i++) {
    //      cout << e << "  " << i << "  " << LtoGnode[e][i] << endl;
@@ -1572,7 +1554,7 @@ void setupSparseM()
    sparseM_NNZ = 3 * sparseM_NNZ_onePart;   // Triple the number of nonzeros.
    
    // CONTROL
-   cout << endl << "sparseM_NNZ = " << sparseM_NNZ << endl;
+   cout << "                                                  sparseM_NNZ = " << sparseM_NNZ << endl;
 
 
    // Sparse storage of the K and A matrices are the same as M. Only extra
@@ -1803,7 +1785,7 @@ void setupSparseG()
    sparseG_NNZ = 3 * sparseG_NNZ_onePart;   // Triple the number of nonzeros.
    
    // CONTROL
-   cout << endl << "sparseG_NNZ = " << sparseG_NNZ << endl;
+   cout << "                                                  sparseG_NNZ = " << sparseG_NNZ << endl;
 
 
 
@@ -1988,18 +1970,6 @@ void calcShape()
    for (int i=0; i<NGP; i++) {
       Sp[i] = new double[NENp];
    }
-
-/*
-   Sv = new double*[NENv];
-   for (int i=0; i<NENv; i++) {
-      Sv[i] = new double[NGP];
-   }
-
-   Sp = new double*[NENp];
-   for (int i=0; i<NENp; i++) {
-      Sp[i] = new double[NGP];
-   }
-*/
 
    dSv = new double**[3];
    for (int i=0; i<3; i++) {
@@ -2283,17 +2253,6 @@ void calcJacob()
          }
       }	
    }
-/*
-   for (int i = 0; i < NE; i++) {
-      gDSp[i] = new double**[3];
-      for(int j = 0; j < 3; j++) {
-         gDSp[i][j] = new double*[NENp];     
-         for(int k = 0; k < NENp; k++) {
-            gDSp[i][j][k] = new double[NGP];
-         }
-      }	
-   }
-*/
 
    gDSv = new double***[NE];
 
@@ -2306,17 +2265,6 @@ void calcJacob()
          }
       }
    }
-/*
-   for (int i = 0; i < NE; i++) {
-      gDSv[i] = new double**[3];
-      for(int j = 0; j < 3; j++) {
-         gDSv[i][j] = new double*[NENv];
-         for(int k = 0; k < NENv; k++) {
-            gDSv[i][j][k] = new double[NGP];
-         }
-      }
-   }
-*/
 
    for (int e = 0; e < NE; e++){
       // Find e_ccord, coordinates for NEC corners of element e.
@@ -2371,7 +2319,6 @@ void calcJacob()
                for (int m = 0; m < 3; m++) { 
                   sum = sum + invJacob[i][m] * dSp[m][j][k];
                }
-               //gDSp[e][i][j][k] = sum;
                gDSp[e][k][j][i] = sum;
             }
          }
@@ -2382,7 +2329,6 @@ void calcJacob()
                for (int m = 0; m < 3; m++) { 
                   sum = sum + invJacob[i][m] * dSv[m][j][k];
                }
-               //gDSv[e][i][j][k] = sum;
                gDSv[e][k][j][i] = sum;
             }
          }
@@ -2554,11 +2500,11 @@ void timeLoop()
    Start = getHighResolutionTime(1, 1.0);
    step0();
    wallClockTime = getHighResolutionTime(2, Start);
-   printf("step0()               took  %8.3f seconds.\n", wallClockTime);
+   printf("step0()                took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
-   printf("Monitoring node is %d, with coordinates [%f, %f, %f].\n\n",
+   printf("\n\nMonitoring node is %d, with coordinates [%f, %f, %f].\n\n\n",
            monPoint, coord[monPoint][0], coord[monPoint][1], coord[monPoint][2]);
 
    printf("Time step  Iter     Time       u_monitor     v_monitor     w_monitor     p_monitor\n");
@@ -2587,7 +2533,7 @@ void timeLoop()
          Start = getHighResolutionTime(1, 1.0);
          step1(iter);
          wallClockTime = getHighResolutionTime(2, Start);
-         printf("step1()               took  %8.3f seconds.\n", wallClockTime);
+         printf("step1()                took  %8.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
@@ -2595,7 +2541,7 @@ void timeLoop()
          Start = getHighResolutionTime(1, 1.0);
          step2(iter);
          wallClockTime = getHighResolutionTime(2, Start);
-         printf("step2()               took  %8.3f seconds.\n", wallClockTime);
+         printf("step2()                took  %8.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
@@ -2603,7 +2549,7 @@ void timeLoop()
          Start = getHighResolutionTime(1, 1.0);
          step3(iter);
          wallClockTime = getHighResolutionTime(2, Start);
-         printf("step3()               took  %8.3f seconds.\n", wallClockTime);
+         printf("step3()                took  %8.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
        
@@ -2797,9 +2743,6 @@ void step0()
          for (int i = 0; i < NENv; i++) {
             for (int j = 0; j < NENv; j++) {
                Me_11[i][j] = Me_11[i][j] + Sv[k][i] * Sv[k][j] * GQfactor;
-//               Ke_11[i][j] = Ke_11[i][j] + viscosity * (gDSv[e][0][i][k] * gDSv[e][0][j][k] +
-//                                                        gDSv[e][1][i][k] * gDSv[e][1][j][k] +
-//                                                        gDSv[e][2][i][k] * gDSv[e][2][j][k]) * GQfactor;
 
                Ke_11[i][j] = Ke_11[i][j] + viscosity * (gDSv[e][k][i][0] * gDSv[e][k][j][0] +
                                                         gDSv[e][k][i][1] * gDSv[e][k][j][1] +
@@ -2809,10 +2752,6 @@ void step0()
 
          for (int i = 0; i < NENv; i++) {
             for (int j = 0; j < NENp; j++) {
-//               Ge_1[i][j] = Ge_1[i][j] - Sp[j][k] * gDSv[e][0][i][k] * GQfactor;
-//               Ge_2[i][j] = Ge_2[i][j] - Sp[j][k] * gDSv[e][1][i][k] * GQfactor;
-//               Ge_3[i][j] = Ge_3[i][j] - Sp[j][k] * gDSv[e][2][i][k] * GQfactor;
-
                Ge_1[i][j] = Ge_1[i][j] - Sp[k][j] * gDSv[e][k][i][0] * GQfactor;
                Ge_2[i][j] = Ge_2[i][j] - Sp[k][j] * gDSv[e][k][i][1] * GQfactor;
                Ge_3[i][j] = Ge_3[i][j] - Sp[k][j] * gDSv[e][k][i][2] * GQfactor;
@@ -2866,14 +2805,16 @@ void step0()
 //   for (int i = 0; i < sparseG_NNZ/3; i++){
 //      cout << i+1 << "  " << sparseGrow[i]+1 << "  " << sparseGcol[i]+1 << "  " << sparseG1value[i] << "  " << sparseG2value[i] << "  " << sparseG3value[i] << endl;
 //   }
-
-  
+   
+   waitForUser("OK000. Enter a character... ");
+   
    // Find the diagonalized version of the upper-left sub mass matrix.
    int row;
    for (int i = 0; i < sparseM_NNZ/3; i++) {
       row = sparseMrow[i];
       Md[row] += sparseMvalue[i];
    }
+   
    // Extend the diagonalized mass matrix for middle and lower-right sub matrices.
    for (int i = 0; i < NN; i++) {
       Md[i + NN]   = Md[i];
@@ -2887,8 +2828,6 @@ void step0()
    //   cout << Md[i] << endl;
    //}
    
-
-
    // Get a copy of Md before modifying it for the BCs of step 1.
    for (int i = 0; i < 3*NN; i++) {
       MdOrig[i] = Md[i];
@@ -2910,8 +2849,41 @@ void step0()
    //   cout << MdInv[i] << endl;
    //}
 
+   
+   // Either calculate Cholesky factorization of [Z] or read it from a file, if it
+   // was previosuly calculate.
 
-   // Use Timothy Davis' CSparse package to store matrix G and its transpose in sparse format.
+   // Try to open the Zchol file to check whether it exists or not.
+   ZcholFile = fopen((whichProblem + ".zchol").c_str(), "rb");
+   
+   if (ZcholFile == NULL) {   // File does not exist
+      calculateZandZchol();
+      //fclose(ZcholFile);
+      writeZcholToFile();
+   } else {
+      readZcholFromFile();
+   }
+
+   // CONTROL
+   cout << endl << "                                                  NNZ of Z_chol->L = " << Z_chol_L->nzmax << endl;
+
+}  // End of function step0()
+
+
+
+
+
+//========================================================================
+void calculateZandZchol()
+//========================================================================
+{
+   // Calculates [Z] and its Cholesky factorization. This function is called
+   // only if the Cholesky factorization of [Z] of the problem being solved
+   // has not been written to a file previously. If the file exists it is
+   // read from the file.
+
+   // Use Timothy Davis' CSparse package to store matrix G and its transpose
+   // in sparse format.
 
    // Create colStarts array for the G matrix.
    /*
@@ -2933,7 +2905,7 @@ void step0()
    //cout << endl << "NNp+1 entry of sparseGcolStarts = " << sparseGcolStarts[NNp] << endl;
    */
 
-   waitForUser("OK00. Enter a character... ");
+   waitForUser("OK1. Enter a character... ");
 
    G1_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 1, 1);   // See page 12 of Tim Davis' book.                                                            // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
    G1_cs->i = sparseGrow;                                                                                                                            //        To directly allocate this in CSC format we need column wise ordering info.
@@ -2953,13 +2925,13 @@ void step0()
    G2_cs->x = sparseG2value;
    G2_cs->nz = sparseG_NNZ/3;
 
-   waitForUser("OK01. Enter a character... ");
+   waitForUser("OK2. Enter a character... ");
 
    G1_cs_CSC = cs_compress(G1_cs);             // Convert G1 from triplet format into compressed column format.
    G2_cs_CSC = cs_compress(G2_cs);
    G3_cs_CSC = cs_compress(G3_cs);
 
-   waitForUser("OK02. Enter a character... ");
+   waitForUser("OK3. Enter a character... ");
 
    G1t_cs_CSC = cs_transpose(G1_cs_CSC, 1);    // Determine the transpose of G1 in compressed column format.
    G2t_cs_CSC = cs_transpose(G2_cs_CSC, 1);
@@ -2969,14 +2941,16 @@ void step0()
    //cs_print(G1_cs_CSC, 0);
    //cs_print(G1t_cs_CSC, 0);
 
-   waitForUser("OK1. Enter a character... ");
+   waitForUser("OK5. Enter a character... ");
 
-   // Use CSparse library to calculate [Z] = dt^2 * transpose(G) * inv(Md) * G
+   // Use CSparse library to calculate [Z] = transpose(G) * inv(Md) * G
 
    // First calculate dummy = inv(Md) * G1. It will have the same sparsity pattern with G, only the values will change.
    double *dummyValues;
    dummyValues = new double[sparseG_NNZ/3];
    
+
+
    for (int i = 0; i < sparseG_NNZ/3; i++) {
       dummyValues[i] = sparseG1value[i] * MdOrigInv[sparseGrow[i]];
    }
@@ -3014,6 +2988,7 @@ void step0()
    for(int i=0; i<Z_cs->nzmax; i++) {
       Z_cs->x[i] = Z_cs->x[i] + dummyZ_cs->x[i];
    }
+
    cs_spfree(dummyZ_cs);
 
    
@@ -3036,7 +3011,7 @@ void step0()
    }
    cs_spfree(dummyZ_cs);
 
-   waitForUser("OK21. Enter a character... ");
+   waitForUser("OK6. Enter a character... ");
    
    //cs_spfree(dummy_cs);    // If we delete this sparseGcol is also deleted, but we need it later.                                                  // TODO
    delete[] dummyValues;
@@ -3045,49 +3020,112 @@ void step0()
    
    cs_spfree(dummy_cs_CSC);
 
-
-   // Multiply the Z matrix with dt^2
-   for(int i=0; i<Z_cs->nzmax; i++) {
-      Z_cs->x[i] = Z_cs->x[i] * dt*dt;
-   }
-
    //cs_print(Z_cs, 0);
 
    // Apply pressure BCs to [Z]
    applyBC_Step2(1);
-   
-   //Apply AMD re-ordering to [Z] and calculate its Cholesky factorization.
-   //csi *AMDorderOfZ;
-   //AMDorderOfZ = cs_amd(1, Z_cs);
-   //for(int i=0; i<Z_cs->m; i++) {
-   //   cout << AMDorderOfZ[i] << endl;
-   //}
-   
-   waitForUser("OK3. Enter a character... ");
 
+   waitForUser("OK7. Enter a character... ");
+   
    Z_sym = cs_schol(1, Z_cs);
    
-   waitForUser("OK4. Enter a character... ");
+   waitForUser("OK8. Enter a character... ");
 
    Z_chol = cs_chol(Z_cs, Z_sym);
 
+   waitForUser("OK9. Enter a character... ");
+
+   //  CONTROL
    //cs_print(Z_chol->L, 0);
    //for (int i =0; i < Z_cs->m; i++) {
    //   cout << i << "   " << Z_sym->pinv[i] << endl;
    //}
 
-   // CONTROL
-   cout << endl << "NNZ of Z = " << Z_cs->nzmax << endl;
-   cout << endl << "NNZ of Z_chol->L = " << Z_chol->L->nzmax << endl;
-
-   waitForUser("OK5. Enter a character... ");
+   cout << endl << "                                                  NNZ of Z = " << Z_cs->nzmax << endl;
 
    // Deallocate memory
    delete[] Md;
    //delete[] MdOrigInv;
    cs_spfree(Z_cs);
 
-}  // End of function step0()
+}  // End of function calculateZandZchol()
+
+
+
+
+
+//========================================================================
+void writeZcholToFile()
+//========================================================================
+{
+   // Write necessary parts of Z_chol and Z_sym to a file so that thet can
+   // be read for future runs. This is done because Zchol calculation takes
+   // too long.
+
+   ZcholFile = fopen((whichProblem + ".zchol").c_str(), "wb");
+
+   fwrite(&Z_chol->L->nzmax, sizeof(int),    size_t(1),                ZcholFile);
+   fwrite(Z_chol->L->p,      sizeof(int),    size_t(NNp+1),            ZcholFile);
+   fwrite(Z_chol->L->i,      sizeof(int),    size_t(Z_chol->L->nzmax), ZcholFile);
+   fwrite(Z_chol->L->x,      sizeof(double), size_t(Z_chol->L->nzmax), ZcholFile);
+   fwrite(Z_sym->pinv,       sizeof(int),    size_t(NNp),              ZcholFile);
+
+   // CONTROL
+   //for(int i=0; i<NNp; i++) {
+   //   cout << Z_sym->pinv[i] << endl;
+   //}
+   
+   fclose(ZcholFile);
+
+                                                                                                                                                     // TODO : Call a function here to deallocate all the allocated memory.
+   char dummyUserInput;
+   cout << "\n\n\n\n   Zchol and Zsym are written to a file.\n\n"
+        << "   Press Ctrl-C to stop this run and restart.\n\n"
+        << "   Press Ctrl-C.\n\n"
+        << "   Press Ctrl-C.\n\n";
+   cin >> dummyUserInput;
+}
+
+
+
+
+
+//========================================================================
+void readZcholFromFile()
+//========================================================================
+{
+   // Read Z_chol and Z_sym from a file.
+   // This is done because Zchol calculation takes too long.
+
+   ZcholFile = fopen((whichProblem + ".zchol").c_str(), "rb");
+   
+   int Z_chol_L_NZMAX;
+   fread(&Z_chol_L_NZMAX, sizeof(int), size_t(1), ZcholFile);
+
+   Z_chol_L = cs_spalloc(NNp, NNp, Z_chol_L_NZMAX, 1, 0);
+
+   Z_chol_Lp  = new int[NNp+1];
+   Z_chol_Li  = new int[Z_chol_L_NZMAX];
+   Z_chol_Lx  = new double[Z_chol_L_NZMAX];
+   Z_sym_pinv = new int[NNp];
+
+   Z_chol_Li = Z_chol_L->i;
+   Z_chol_Lp = Z_chol_L->p;
+   Z_chol_Lx = Z_chol_L->x;
+   
+   fread(Z_chol_Lp,  sizeof(int),    size_t(NNp+1),          ZcholFile);
+   fread(Z_chol_Li,  sizeof(int),    size_t(Z_chol_L_NZMAX), ZcholFile);
+   fread(Z_chol_Lx,  sizeof(double), size_t(Z_chol_L_NZMAX), ZcholFile);
+   fread(Z_sym_pinv, sizeof(int),    size_t(NNp),            ZcholFile);
+
+   // CONTROL
+   //for(int i=0; i<NNp; i++) {
+   //   cout << Z_sym_pinv[i] << endl;
+   //}
+
+   fclose(ZcholFile);
+
+}  // End of function readZcholFromFile()
 
 
 
@@ -3164,7 +3202,6 @@ void step1(int iter)
        
             for (int i = 0; i < NENv; i++) {
                for (int j = 0; j < NENv; j++) {
-//                  Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][0][j][k] + v0 * gDSv[e][1][j][k] + w0 * gDSv[e][2][j][k]) * Sv[i][k] * GQfactor;
                   Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][k][j][0] + v0 * gDSv[e][k][j][1] + w0 * gDSv[e][k][j][2]) * Sv[k][i] * GQfactor;
                }
             }       
@@ -3238,20 +3275,20 @@ void step1(int iter)
 
    beta = 0.0;
    mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- K * UnpHalf_prev)  part of R1
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R1
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R1
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R2
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R3
 
    
    beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
    mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- A * UnpHalf_prev)  part of R1
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R1   
-   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R1
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R2   
+   mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R3
 
 
    beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
    mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R11);            // This contributes to (- G * Pn)  part of R1
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R12);            // This contributes to (- G * Pn)  part of R1
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R13);            // This contributes to (- G * Pn)  part of R1
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R12);            // This contributes to (- G * Pn)  part of R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R13);            // This contributes to (- G * Pn)  part of R3
    
 
    for (int i = 0; i < NN; i++) {
@@ -3304,13 +3341,15 @@ void step2(int iter)
    // Executes step 2 of the method to determine pressure of the new time step.
 
    // Calculate the RHS vector of step 2.
-   // R2 = Gt * (UnpHalf - dt*dt * MdOrigInv * K * Acc_prev)
+   // This is 1/(dt*dt) times of the residual defined in Blasco's paper.
+   // R2 = Gt * (UnpHalf / (dt*dt) * MdOrigInv * K * Acc_prev)
    
    double *dummy;
-   dummy = new double[3*NN];    // Stores (UnpHalf - dt*dt * MdOrigInv * K * Acc_prev)
+   dummy = new double[3*NN];    // Stores (UnpHalf / (dt*dt) * MdOrigInv * K * Acc_prev)
    
+   double oneOverdt2 = 1.0000000000000000 / (dt*dt);
    for (int i=0; i<3*NN; i++) {
-      dummy[i] = UnpHalf[i];
+      dummy[i] = oneOverdt2 * UnpHalf[i];
    }
 
    
@@ -3326,11 +3365,10 @@ void step2(int iter)
    matdescra[2] = 'n';
    matdescra[3] = 'c';
 
-   // Subtract dt*dt * MdOrigInv * K * Acc_prev from UnpHalf
+   // Subtract MdOrigInv * K * Acc_prev from UnpHalf
    if (iter != 1) {   // KtimesAcc_prev = 0. So skip this part
-      double dt2 = dt*dt;
       for (int i = 0; i < 3*NN; i++) {
-         dummy[i] = dummy[i] - dt2 * MdOrigInv[i] * KtimesAcc_prev[i];
+         dummy[i] = dummy[i] - MdOrigInv[i] * KtimesAcc_prev[i];
       }
    }
 
@@ -3369,16 +3407,16 @@ void step2(int iter)
 
 
    // Solve for Pdot using Cholesky factorization obtained in step 0.
-   // Reference: Timothy Davis' Book, page 136
+   // Reference: Timothy Davis' book, page 136
    for (int i = 0; i < NNp; i++) {
       Pdot[i] = R2[i];                    // Equate the solution vector to the RHS vector first.
    }
    double *x;
    x = new double[NNp]; //cs_malloc(NNp, sizeof(double));    // Get workspace
-   cs_ipvec(Z_sym->pinv, R2, x, NNp);
-   cs_lsolve(Z_chol->L, x);
-   cs_ltsolve(Z_chol->L, x);
-   cs_pvec(Z_sym->pinv, x, Pdot, NNp);
+   cs_ipvec(Z_sym_pinv, R2, x, NNp);
+   cs_lsolve(Z_chol_L, x);
+   cs_ltsolve(Z_chol_L, x);
+   cs_pvec(Z_sym_pinv, x, Pdot, NNp);
    cs_free(x);
 
    // CONTROL
@@ -3509,11 +3547,10 @@ void applyBC_initial()
       Un[node + 2*NN] = BCstr[whichBC][2];
    }
 
-   /* CONTROL
-   for (int i = 0; i < 3*NN; i++) {
-      cout << Un[i] << endl;
-   }
-   */
+   // CONTROL
+   //for (int i = 0; i < 3*NN; i++) {
+   //   cout << Un[i] << endl;
+   //}
 
 }  // End of function applyBC_initial()
 
@@ -3878,7 +3915,7 @@ double getHighResolutionTime(int flag, double start)
    // If flag is 1 return the current time (start value is not used).
    // If flag is 2 return the current time minus the start value, i.e. return an elapsed time.
 
-   #ifdef WIN32
+   #ifdef WINDOWS
       // Windows
       if (flag == 1) {
          return double(clock());    // On Windows, clock() returns wall clock time.
@@ -3899,7 +3936,7 @@ double getHighResolutionTime(int flag, double start)
       } else {
          return (time_seconds - start);
       }
-   #endif // WIN32
+   #endif // WINDOWS
 
 } // End of function getHighResolutionTime()
 
