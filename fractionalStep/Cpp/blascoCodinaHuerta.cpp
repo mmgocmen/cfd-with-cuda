@@ -191,7 +191,6 @@ double *Unp1_prev;        // U_i^n+1 of the reference paper.
 double *UnpHalf;          // U_i+1^n+1/2 of the reference paper.
 double *UnpHalf_prev;     // U_i^n+1/2 of the reference paper.
 
-double *AccHalf;          // A_i+1^n+1/2 of the reference paper.
 double *Acc;              // A_i+1^n+1 of the reference paper.
 double *Acc_prev;         // A_i^n+1 of the reference paper.
 
@@ -2398,7 +2397,6 @@ void initializeAndAllocate()
    UnpHalf      = new double[3*NN];     // U_i+1^n+1/2 of the reference paper.
    UnpHalf_prev = new double[3*NN];     // U_i^n+1/2 of the reference paper.
 
-   AccHalf      = new double[3*NN];     // A_i+1^n+1/2 of the reference paper.
    Acc          = new double[3*NN];     // A_i+1^n+1 of the reference paper.
    Acc_prev     = new double[3*NN];     // A_i^n+1 of the reference paper.
 
@@ -2434,7 +2432,6 @@ void initializeAndAllocate()
       Unp1_prev[i]     = 0.0;
       UnpHalf[i]       = 0.0;
       UnpHalf_prev[i]  = 0.0;
-      AccHalf[i]       = 0.0;
       Acc[i]           = 0.0;
       Acc_prev[i]      = 0.0;
       Md[i]            = 0.0;
@@ -3306,14 +3303,10 @@ void step1(int iter)
    // Modify R1 for velocity BCs
    applyBC_Step1(2);
 
-   // Calculate AccHalf vector.
-   for (int i=0; i<3*NN; i++) {
-      AccHalf[i] = R1[i] * MdInv[i];
-   }
    
    // Calculate UnpHalf
    for (int i=0; i<3*NN; i++) {
-      UnpHalf[i] = Un[i] + dt * AccHalf[i];
+      UnpHalf[i] = Un[i] + dt * R1[i] * MdInv[i];
    }
 
    // CONTROL
