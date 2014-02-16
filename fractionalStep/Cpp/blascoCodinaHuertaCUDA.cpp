@@ -2554,7 +2554,6 @@ void initializeAndAllocateGPU()
    // Do the necessary memory allocations for the GPU. Apply the initial
    // condition or read the restart file.
 
-   //cusparseStatus_t   status;
    handle = 0;
    descr  = 0;
    
@@ -2621,9 +2620,6 @@ void initializeAndAllocateGPU()
    cudaStatus = cudaMemcpy(MdInv_d,       MdInv,           3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error40: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(MdOrigInv_d,   MdOrigInv,       3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error41: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
       
-   //cudaMemcpy(Un_d,           Un,               3*NN   * sizeof(double), cudaMemcpyHostToDevice);
-   //cudaMemcpy(Pn_d,           Pn,               NNp    * sizeof(double), cudaMemcpyHostToDevice);
-
 
    // Extract the 1st column of BCvelNodes and send it to the device.
    int *dummy;
@@ -2637,14 +2633,16 @@ void initializeAndAllocateGPU()
    
    // Read the restart file if isRestart is equal to 1. If not, apply the
    // specified BCs.                                                                                                                                 // TODO: Below initialization is already done.
-   if (isRestart == 1) {
-     readRestartFile();
-   } else {
-     applyBC_initial();
-   }
+   //if (isRestart == 1) {
+   //  readRestartFile();
+   //} else {
+   //  applyBC_initial();
+   //}
+
    // Send Un to the GPU
    cudaStatus = cudaMemcpy(Un_d, Un, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-     
+   cudaStatus = cudaMemcpy(Pn_d, Pn, NNp  * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
    createTecplot();
 
    // Initialize discrete time level and time.
@@ -2707,18 +2705,14 @@ void timeLoop()
      
       // Initialize variables for the first iteration of the following loop.
       #ifdef USECUDA
-         cudaStatus = cudaMemcpy(UnpHalf_prev_d, Un, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-         cudaStatus = cudaMemcpy(Unp1_prev_d,    Un, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error45: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-         cudaStatus = cudaMemcpy(Un_d,           Un, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error46: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+         cudaStatus = cudaMemcpy(UnpHalf_prev_d, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error45: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+         cudaStatus = cudaMemcpy(Pnp1_prev_d,    Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error46: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
-         cudaStatus = cudaMemset((void *)Acc_prev_d, 0, 3*NN * sizeof(double));
-
-         cudaStatus = cudaMemcpy(Pn_d,        Pn, NNp  * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error47: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-         cudaStatus = cudaMemcpy(Pnp1_prev_d, Pn, NNp  * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error48: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+         cudaStatus = cudaMemset((void *)Acc_prev_d, 0, 3*NN * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error47: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
       #else
          for (int i = 0; i < 3*NN; i++) {
             UnpHalf_prev[i] = Un[i];
-            Unp1_prev[i]    = Un[i];
+            //Unp1_prev[i]    = Un[i];
             Acc_prev[i]     = 0.0;
          }
 
@@ -2767,6 +2761,12 @@ void timeLoop()
          #ifdef USECUDA
             if(checkConvergenceGPU()) {
                break;
+            } else {
+               // Get ready for the next iteration
+               cudaStatus = cudaMemcpy(UnpHalf_prev_d, UnpHalf_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error48: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+               cudaStatus = cudaMemcpy(Unp1_prev_d,    Unp1_d,    3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error49: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+               cudaStatus = cudaMemcpy(Acc_prev_d,     Acc_d,     3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error50: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+               cudaStatus = cudaMemcpy(Pnp1_prev_d,    Pnp1_d,    NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error51: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
             }
          #else
             double sum1, sum2;
@@ -2802,8 +2802,6 @@ void timeLoop()
                Unp1_prev[i] = Unp1[i];
                Acc_prev[i] = Acc[i];
             }
-            
-            cudaStatus = cudaMemcpy(UnpHalf_prev_d, UnpHalf_prev, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error19: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
             for (int i = 0; i < NNp; i++) {
                Pnp1_prev[i] = Pnp1[i];
@@ -2868,8 +2866,6 @@ void timeLoop()
             //   printf("%d   %g\n", i, KtimesAcc_prev[i]);
             //}
 
-            cudaStatus = cudaMemcpy(KtimesAcc_prev_d, KtimesAcc_prev, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error20: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-
             delete[] pointerE;
             delete[] KtimesAcc_prevSmall;
             delete[] Acc_prevSmall;
@@ -2880,10 +2876,10 @@ void timeLoop()
      
      
       // Get ready for the next time step
-      //#ifdef USECUDA
-         cudaStatus = cudaMemcpy(Un_d, Unp1_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error21: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-         cudaStatus = cudaMemcpy(Pn_d, Pnp1_d, NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error22: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      //#else
+      #ifdef USECUDA
+         cudaStatus = cudaMemcpy(Un_d, Unp1_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error52: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+         cudaStatus = cudaMemcpy(Pn_d, Pnp1_d, NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error53: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      #else
          for (int i = 0; i < 3*NN; i++) {
             Un[i] = Unp1[i];
          }
@@ -2891,25 +2887,25 @@ void timeLoop()
          for (int i = 0; i < NNp; i++) {
             Pn[i] = Pnp1[i];
          }
-      //#endif
+      #endif
      
-      if (timeN % 500 == 0 || abs(timeT - t_final) < 1e-10) {
-         //#ifdef USECUDA
-         //   cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error23: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-         //   cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error24: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-         //#endif
+      if (timeN % 50 == 0 || abs(timeT - t_final) < 1e-10) {
+         #ifdef USECUDA
+            cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+            cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+         #endif
          createTecplot();
       }
 
 
       // Print monitor point data
-      //#ifdef USECUDA
-      //   printMonitorDataGPU(iter);
-      //#else
+      #ifdef USECUDA
+         printMonitorDataGPU(iter);
+      #else
          printf("\n%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n",
                 timeN, iter, timeT, Un[monPoint],
                 Un[NN+monPoint], Un[2*NN+monPoint], Pn[monPoint]);
-      //#endif
+      #endif
 
    }  // End of while loop for time
 
@@ -3374,15 +3370,15 @@ void readZcholFromFile()
 
    // Copy variables to the GPU
    #ifdef USECUDA
-      cudaStatus = cudaMalloc((void**)&Z_chol_Lp_d,  (NNp + 1)      * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error25: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMalloc((void**)&Z_chol_Li_d,  Z_chol_L_NZMAX * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error26: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMalloc((void**)&Z_chol_Lx_d,  Z_chol_L_NZMAX * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error27: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMalloc((void**)&Z_sym_pinv_d, NNp            * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error28: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMalloc((void**)&Z_chol_Lp_d,  (NNp + 1)      * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMalloc((void**)&Z_chol_Li_d,  Z_chol_L_NZMAX * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error56: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMalloc((void**)&Z_chol_Lx_d,  Z_chol_L_NZMAX * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error57: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMalloc((void**)&Z_sym_pinv_d, NNp            * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error58: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
-      cudaStatus = cudaMemcpy(Z_chol_Lp_d,  Z_chol_Lp,  (NNp + 1)      * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error29: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMemcpy(Z_chol_Li_d,  Z_chol_Li,  Z_chol_L_NZMAX * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error30: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMemcpy(Z_chol_Lx_d,  Z_chol_Lx,  Z_chol_L_NZMAX * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error31: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMemcpy(Z_sym_pinv_d, Z_sym_pinv, NNp            * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error32: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMemcpy(Z_chol_Lp_d,  Z_chol_Lp,  (NNp + 1)      * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error59: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMemcpy(Z_chol_Li_d,  Z_chol_Li,  Z_chol_L_NZMAX * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error60: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMemcpy(Z_chol_Lx_d,  Z_chol_Lx,  Z_chol_L_NZMAX * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error61: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      cudaStatus = cudaMemcpy(Z_sym_pinv_d, Z_sym_pinv, NNp            * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error62: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
       
       cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
       cout << endl;
@@ -3402,6 +3398,10 @@ void step1(int iter)
 //========================================================================
 {
    // Executes step 1 of the method to determine the intermediate velocity.
+
+   #ifdef USECUDA
+      cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error63: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   #endif
 
    // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
    if (iter == 1) {
