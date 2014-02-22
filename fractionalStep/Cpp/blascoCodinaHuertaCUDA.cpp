@@ -30,6 +30,7 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include "mkl.h"
 #include "mkl_types.h"
 #include "mkl_spblas.h"
 #include "mkl_service.h"
@@ -136,6 +137,7 @@ double *sparseMvalue;   // Nonzero values of the global mass matrix. Actually th
 int *sparseMcol;        // Nonzero columns of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
 int *sparseMrow;        // Nonzero rows of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
 int *sparseMrowStarts;  // Row start indices of M, K and A matrices (for CSR storage). Info is kept only for the upper-left sub mass matrix.
+int *sparseMrowStartsMod;   // A modified version of the above array, used by MKL
 
 double *sparseKvalue;   // Nonzero values of the global K matrix. Actually the values of only the upper-left sub stiffness matrix are stored. [K] has the same sparsity structure as [M].
 double *sparseAvalue;   // Nonzero values of the global A matrix. Actually the values of only the upper-left sub mass matrix are stored. [A] has the same sparsity structure as [M].
@@ -147,6 +149,7 @@ double *sparseG3value;  // Nonzero values of the 3rd part of the global G matrix
 int *sparseGcol;        // Nonzero columns of only one sub G matrix.
 int *sparseGrow;        // Nonzero rows of only one sub G matrix.
 int *sparseGrowStarts;  // Row start indices of G matrix (for CSR storage).
+int *sparseGrowStartsMod;   // A modified version of the above array, used by MKL
 
 cs *G1_cs, *G2_cs, *G3_cs, *G1_cs_CSC, *G2_cs_CSC, *G3_cs_CSC;    // CSparse storage of sub [G] matrices
 cs *G1t_cs_CSC, *G2t_cs_CSC, *G3t_cs_CSC;                         // CSparse storage of tranposes of sub [G] matrices
@@ -1632,6 +1635,13 @@ void setupSparseM()
    for (int i = 1; i <= NN; i++) {
       sparseMrowStarts[i] = sparseMrowStarts[i-1] + NNZcolInARow[i-1];
    }
+   
+   // MKL also needs the following modified version of sparseMrowStarts
+   sparseMrowStartsMod = new int[NN];
+   for (int i = 0; i < NN; i++) {
+      sparseMrowStartsMod[i] = sparseMrowStarts[i+1];
+   };
+
 
    // CONTROL
    //cout << sparseMrowStarts[NN+1]  << "   "  << sparseM_NNZ/3 << endl;
@@ -1855,10 +1865,15 @@ void setupSparseG()
    // For CSR storage necessary for MKL and CUSP, we need row starts array too.                                                                      // TODO: This is repeated below.
    sparseGrowStarts = new int[NN+1];
    sparseGrowStarts[0] = 0;
-   //sparseGrowStarts[NN] = sparseG_NNZ;
    for (int i = 1; i <= NN; i++) {
       sparseGrowStarts[i] = sparseGrowStarts[i-1] + NNZcolInARow[i-1];
    }
+
+   // MKL also needs the following modified version of sparseGrowStarts
+   sparseGrowStartsMod = new int[NN];
+   for (int i = 0; i < NN; i++) {
+      sparseGrowStartsMod[i] = sparseGrowStarts[i+1];
+   };
 
    // CONTROL
    //cout << sparseGrowStarts[NN+1]  << "   "  << sparseG_NNZ/3 << endl;
@@ -2726,10 +2741,10 @@ void timeLoop()
       for (iter = 1; iter <= maxIter; iter++) {
 
          // Calculate intermediate velocity.
-         Start = getHighResolutionTime(1, 1.0);
+         //Start = getHighResolutionTime(1, 1.0);
          step1(iter);
-         wallClockTime = getHighResolutionTime(2, Start);
-         printf("step1()                took  %8.3f seconds.\n", wallClockTime);
+         //wallClockTime = getHighResolutionTime(2, Start);
+         //printf("step1()                took  %8.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
@@ -2816,8 +2831,6 @@ void timeLoop()
             char transa, matdescra[6];
             double alpha, beta;
             int m = NN;
-            int *pointerE;
-            pointerE = new int[m];
 
             matdescra[0] = 'g';
             matdescra[1] = 'u';
@@ -2828,10 +2841,6 @@ void timeLoop()
             beta = 0.0;
             transa = 'n';
 
-            for (int i = 0; i < NN; i++) {
-               pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-            };
-
             double *KtimesAcc_prevSmall;
             double *Acc_prevSmall;
             KtimesAcc_prevSmall = new double[NN];
@@ -2840,7 +2849,7 @@ void timeLoop()
             for (int i = 0; i < NN; i++) {
                Acc_prevSmall[i] = Acc_prev[i];
             }
-            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 1st part of [K] * {Acc_prev}
+            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 1st part of [K] * {Acc_prev}
             for (int i = 0; i < NN; i++) {
                KtimesAcc_prev[i] = KtimesAcc_prevSmall[i];
             }
@@ -2848,7 +2857,7 @@ void timeLoop()
             for (int i = 0; i < NN; i++) {
                Acc_prevSmall[i] = Acc_prev[i + NN];
             }
-            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 2nd part of [K] * {Acc_prev}
+            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 2nd part of [K] * {Acc_prev}
             for (int i = 0; i < NN; i++) {
                KtimesAcc_prev[i + NN] = KtimesAcc_prevSmall[i];
             }
@@ -2856,7 +2865,7 @@ void timeLoop()
             for (int i = 0; i < NN; i++) {
                Acc_prevSmall[i] = Acc_prev[i + 2*NN];
             }
-            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 3rd part of [K] * {Acc_prev}
+            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 3rd part of [K] * {Acc_prev}
             for (int i = 0; i < NN; i++) {
                KtimesAcc_prev[i + 2*NN] = KtimesAcc_prevSmall[i];
             }
@@ -2866,7 +2875,6 @@ void timeLoop()
             //   printf("%d   %g\n", i, KtimesAcc_prev[i]);
             //}
 
-            delete[] pointerE;
             delete[] KtimesAcc_prevSmall;
             delete[] Acc_prevSmall;
          
@@ -2889,7 +2897,7 @@ void timeLoop()
          }
       #endif
      
-      if (timeN % 50 == 0 || abs(timeT - t_final) < 1e-10) {
+      if (timeN % 100 == 0 || abs(timeT - t_final) < 1e-10) {
          #ifdef USECUDA
             cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
             cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -2898,7 +2906,7 @@ void timeLoop()
       }
 
 
-      // Print monitor point data
+      // Print monitor point data                                                                                                                    // TODO: If convergence is not achieved iter is written as iterMax+1, which is not correct.
       #ifdef USECUDA
          printMonitorDataGPU(iter);
       #else
@@ -3088,9 +3096,6 @@ void step0()
    //   cout << MdInv[i] << endl;
    //}
    
-   cout << "\n\nBeginning Zcol calculation\n\n";
-   
-
    // Either calculate Cholesky factorization of [Z] or read it from a file,
    // if it was previosuly calculated.
 
@@ -3399,13 +3404,12 @@ void step1(int iter)
 {
    // Executes step 1 of the method to determine the intermediate velocity.
 
-   #ifdef USECUDA
-      cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error63: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   #endif
-
+   double Start, wallClockTime;
+   
    // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
    if (iter == 1) {
-
+      Start = getHighResolutionTime(1, 1.0);
+   
       int nnzM = sparseM_NNZ / 3;
       int nnzM2 = 2 * nnzM;
 
@@ -3477,7 +3481,7 @@ void step1(int iter)
          // Assemble Ae into sparse A.
          for (int i = 0; i < NENv; i++) {
             for (int j = 0; j < NENv; j++) {
-               sparseAvalue[sparseMapM[e][i][j]]         += Ae_11[i][j];   // Assemble upper left sub-matrix of A
+               sparseAvalue[sparseMapM[e][i][j]] += Ae_11[i][j];   // Assemble upper left sub-matrix of A
             }
          }
       }  // End of element loop
@@ -3496,12 +3500,17 @@ void step1(int iter)
       //for (int i = 0; i < sparseM_NNZ/3; i++){
       //   cout << i+1 << "  " << sparseMrow[i]+1 << "  " << sparseMcol[i]+1 << "  " << sparseAvalue[i] << endl;
       //}
+      
+      wallClockTime = getHighResolutionTime(2, Start);
+      printf("Calc. of [A] in step1  took  %8.3f seconds.\n", wallClockTime);
 
    }  // End of iter==1 check
 
 
    // Calculate the RHS vector of step 1.
    // R1 = - K * UnpHalf_prev - A * UnpHalf_prev - G * Pn;
+
+   Start = getHighResolutionTime(1, 1.0);
 
    #ifdef USECUDA
       step1GPUpart();
@@ -3511,10 +3520,6 @@ void step1(int iter)
       double beta;
       int m = NN;
       int k = NNp;
-      int *pointerE;
-      int *pointerE2;
-      pointerE = new int[m];
-      pointerE2 = new int[m];
 
       transa = 'n';
    
@@ -3523,27 +3528,24 @@ void step1(int iter)
       matdescra[2] = 'n';
       matdescra[3] = 'c';
    
-      for (int i = 0; i < m; i++) {
-         pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-      };
-      for (int i = 0; i < m; i++) {
-         pointerE2[i] = sparseGrowStarts[i+1];  // A new form of rowStarts data required by mkl_dcsrmv
-      };
-
       double *UnpHalf_prev1, *UnpHalf_prev2, *UnpHalf_prev3;
       UnpHalf_prev1 = new double[NN];
       UnpHalf_prev2 = new double[NN];
       UnpHalf_prev3 = new double[NN];
+      
       for (int i = 0; i < NN; i++) {
          UnpHalf_prev1[i] = UnpHalf_prev[i];
          UnpHalf_prev2[i] = UnpHalf_prev[i + NN];
          UnpHalf_prev3[i] = UnpHalf_prev[i + 2*NN];
       }
+      //cblas_dcopy(NN, UnpHalf_prev,        1, UnpHalf_prev1, 1);  // Copy 1st part of UnpHalf_prev to UnpHalf_prev1 using MKL
+      //cblas_dcopy(NN, UnpHalf_prev + NN,   1, UnpHalf_prev2, 1);  // Copy 2nd part of UnpHalf_prev to UnpHalf_prev2 using MKL
+      //cblas_dcopy(NN, UnpHalf_prev + 2*NN, 1, UnpHalf_prev3, 1);  // Copy 3rd part of UnpHalf_prev to UnpHalf_prev3 using MKL
 
       beta = 0.0;
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- K * UnpHalf_prev)  part of R1
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R2
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R3
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev1, &beta, R11);   // This contributes to (- K * UnpHalf_prev)  part of R1
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R2
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R3
 
       // CONTROL
       //for (int i = 0; i < NN; i++) {
@@ -3551,15 +3553,15 @@ void step1(int iter)
       //}
    
       beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- A * UnpHalf_prev)  part of R1
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R2   
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R3
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev1, &beta, R11);   // This contributes to (- A * UnpHalf_prev)  part of R1
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R2   
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R3
 
 
       beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
-      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R11);            // This contributes to (- G * Pn)  part of R1
-      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R12);            // This contributes to (- G * Pn)  part of R2
-      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R13);            // This contributes to (- G * Pn)  part of R3
+      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pn, &beta, R11);            // This contributes to (- G * Pn)  part of R1
+      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pn, &beta, R12);            // This contributes to (- G * Pn)  part of R2
+      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pn, &beta, R13);            // This contributes to (- G * Pn)  part of R3
    
 
       for (int i = 0; i < NN; i++) {
@@ -3567,6 +3569,9 @@ void step1(int iter)
          R1[i + NN]   = R12[i];
          R1[i + 2*NN] = R13[i];
       }
+      //cblas_dcopy(NN, R11, 1, R1, 1);         // Copy R11 to the 1st part of R1 using MKL
+      //cblas_dcopy(NN, R12, 1, R1 + NN, 1);    // Copy R12 to the 2nd part of R1 using MKL
+      //cblas_dcopy(NN, R13, 1, R1 + 2*NN, 1);  // Copy R13 to the 3rd part of R1 using MKL
 
       // CONTROL
       //for (int i = 0; i < 3*NN; i++) {
@@ -3585,7 +3590,15 @@ void step1(int iter)
       for (int i=0; i<3*NN; i++) {
          UnpHalf[i] = Un[i] + dt * R1[i] * MdInv[i];
       }
-
+      
+      //double *dummy;
+      //int NN3 = 3*NN;
+      //dummy = new double[3*NN];
+      //vdMul(NN3, R1, MdInv, dummy);                // Multiplies R1 and MdInv vectors element-by-element using MKL
+      //cblas_dcopy(NN3, Un, 1, UnpHalf, 1);         // Copies UnpHalf to Un using MKL
+      //cblas_daxpy(NN3, dt, dummy, 1, UnpHalf, 1);  // UnpHalf = UnpHalf + dt*dummy
+      //delete[] dummy;
+      
       // CONTROL
       //for (int i=0; i<3*NN; i++) {
       //   cout << UnpHalf[i] << endl;
@@ -3598,11 +3611,10 @@ void step1(int iter)
       delete[] UnpHalf_prev1;
       delete[] UnpHalf_prev2;
       delete[] UnpHalf_prev3;
-   
-      delete[] pointerE;
-      delete[] pointerE2;
    #endif
-
+   
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("step1()                took  %8.3f seconds.\n", wallClockTime);
 }  // End of function step1()
 
 
@@ -3649,8 +3661,6 @@ void step2(int iter)
    double alpha, beta;
    int m = NN;
    int k = NNp;
-   int *pointerE;
-   pointerE = new int[m];
 
    matdescra[0] = 'g';
    matdescra[1] = 'u';
@@ -3660,10 +3670,6 @@ void step2(int iter)
    alpha = 1.0;
    transa = 't';    // Multiply using Gt, not G
       
-   for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-   };
-
    double *dummy1, *dummy2, *dummy3;
    dummy1 = new double[NN];
    dummy2 = new double[NN];
@@ -3675,10 +3681,10 @@ void step2(int iter)
    }
 
    beta = 0.0;
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE, dummy1, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, dummy1, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
    beta = 1.0;   // Add the results of the following Matrix-vector multiplication to R2
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE, dummy2, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE, dummy3, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, dummy2, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, dummy3, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
 
    // CONTROL
    //for (int i=0; i<NNp; i++) {
@@ -3745,7 +3751,6 @@ void step2(int iter)
    delete[] dummy1;
    delete[] dummy2;
    delete[] dummy3;
-   delete[] pointerE;
 
 }  // End of function step2()
 
@@ -3767,8 +3772,6 @@ void step3(int iter)
    double beta = 0.0;
    int m = NN;
    int k = NNp;
-   int *pointerE; 
-   pointerE = new int[m];
 
    transa = 'n';
    
@@ -3777,13 +3780,9 @@ void step3(int iter)
    matdescra[2] = 'n';
    matdescra[3] = 'c';
    
-   for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-   };
-
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R31);            // This contributes to (- dt * G1 * Pdot)  part of R3
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R32);            // This contributes to (- dt * G2 * Pdot)  part of R3
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R33);            // This contributes to (- dt * G3 * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pdot, &beta, R31);            // This contributes to (- dt * G1 * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pdot, &beta, R32);            // This contributes to (- dt * G2 * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pdot, &beta, R33);            // This contributes to (- dt * G3 * Pdot)  part of R3
 
    for (int i = 0; i < NN; i++) {
       R3[i]        = R31[i];
@@ -3822,8 +3821,6 @@ void step3(int iter)
    //   cout << Unp1[i] << endl;
    //}
 
-   delete[] pointerE;
-
 }  // End of function step3()
 
 
@@ -3838,6 +3835,9 @@ void applyBC_initial()
    //double x, y, z;
    int node, whichBC;
 
+   //int counter = 0;
+   //double x, y, z, velocity;
+
    // Apply velocity BCs
    for (int i = 0; i < BCnVelNodes; i++) {
       node = BCvelNodes[i][0];     // Node at which this velocity BC is specified.
@@ -3851,6 +3851,25 @@ void applyBC_initial()
       Un[node]        = BCstr[whichBC][0];                                                                                                           // TODO : Actually BCstr should be strings and here we need a function parser.
       Un[node + NN]   = BCstr[whichBC][1];
       Un[node + 2*NN] = BCstr[whichBC][2];
+
+      // Below is for the fully-developed inlet of the bending square duct problem
+      /*
+      if (whichBC == 0) {
+         counter++;
+         
+         x = coord[node][0];
+         y = coord[node][1];
+         z = coord[node][2];
+         
+         velocity = 2.25 * (4*y - 4*y*y) * (4*z - 4*z*z);   // Average u is 1.0
+      
+         //printf("%d : %f   %f   %f   %f\n", counter, x, y, z, velocity);
+
+         Un[node]        = velocity;
+         Un[node + NN]   = 0.0;
+         Un[node + 2*NN] = 0.0;
+      }
+      */
    }
 
    // CONTROL
