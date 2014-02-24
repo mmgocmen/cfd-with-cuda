@@ -31,7 +31,8 @@ using namespace std;
 extern int NN, NNp, sparseM_NNZ, sparseG_NNZ, *sparseMrowStarts, *sparseMcol, BCnVelNodes, zeroPressureNode, Z_chol_L_NZMAX, timeN, monPoint;
 extern double dt, timeT, t_ini, tolerance, *sparseAvalue, *sparseKvalue, *UnpHalf_prev, *Pn, *R1, *R11, *R12, *R13, *R2, *Un, *UnpHalf, *KtimesAcc_prev, *Acc_prev, *Acc, *MdOrigInv, *Unp1, *Pnp1, *Pdot;
 extern char dummyUserInput;
-
+extern string whichProblem;
+extern FILE *Zfile;
 
 extern double *K_d, *A_d, *G1_d, *G2_d, *G3_d;
 extern double *MdInv_d, *Un_d, *Pn_d, *Pnp1_d, *Pnp1_prev_d;
@@ -142,7 +143,7 @@ void calculateZ_CUSP()
 
    
    // Modify Z_CUSP_CSR for known pressures.
-   int LARGE = 1000;                                                                                                                                  // TODO: How important is this LARGE value in solution accuracy and convergence rate of CG?
+   int LARGE = 1000;                                                                                                                                 // TODO: How important is this LARGE value in solution accuracy and convergence rate of CG?
    if (zeroPressureNode > 0) {  // If node is negative it means we do not set pressure to zero at any node.
       // Multiply Z[node][node] by LARGE
       for (int j = Z_CUSP_CSR.row_offsets[zeroPressureNode]; j < Z_CUSP_CSR.row_offsets[zeroPressureNode + 1]; j++) {  // Go through row "zerpPressureNode" of [Z].
@@ -163,6 +164,38 @@ void calculateZ_CUSP()
    cout << endl;
    cout << "At the end of calculateZ_CUSP() function" << endl;
    cout << "   Free GPU memory =  " << freeGPUmemory << endl;
+
+
+   
+   // Write Z_CUSP_CSR matrix to a file for further use by the MKL_CG solver in a different run.
+   Zfile = fopen((whichProblem + ".zCSR").c_str(), "wb");
+
+   int *rowOffsets, *colIndices;
+   double *values;
+   
+   rowOffsets = new int[NNp+1];
+   colIndices = new int[Z_CUSP_CSR.num_entries];
+   values = new double[Z_CUSP_CSR.num_entries];
+   
+   for (int i = 0; i < NNp + 1; i++) {
+      rowOffsets[i] = Z_CUSP_CSR.row_offsets[i];
+   }
+   
+   for (int i = 0; i < Z_CUSP_CSR.num_entries; i++) {
+      colIndices[i] = Z_CUSP_CSR.column_indices[i];
+      values[i] = Z_CUSP_CSR.values[i];
+   }
+
+   fwrite(&Z_CUSP_CSR.num_entries, sizeof(int),    size_t(1),                      Zfile);
+   fwrite(rowOffsets,              sizeof(int),    size_t(NNp+1),                  Zfile);
+   fwrite(colIndices,              sizeof(int),    size_t(Z_CUSP_CSR.num_entries), Zfile);
+   fwrite(values,                  sizeof(double), size_t(Z_CUSP_CSR.num_entries), Zfile);
+   
+   fclose(Zfile);
+
+   delete[] rowOffsets;
+   delete[] colIndices;
+   delete[] values;
 
 }  // End of function calculateZ_CUSP()
 
@@ -194,7 +227,7 @@ void CUSP_CG_solver()
    //cusp::precond::scaled_bridson_ainv<double, cusp::device_memory> M(Z_CUSP_CSR_d, .1);
    //cusp::precond::aggregation::smoothed_aggregation<int, double, cusp::device_memory> M(Z_CUSP_CSR_d);
 
-   cusp::krylov::cg(Z_CUSP_CSR_d, soln_d, RHS_d, monitor, M);
+   cusp::krylov::cg(Z_CUSP_CSR_d, soln_d, RHS_d, monitor);
    
    cout << "CG solver made " << monitor.iteration_count() << " iterations. Residual norm is " << monitor.residual_norm() << endl;
 
@@ -202,6 +235,11 @@ void CUSP_CG_solver()
    thrust::copy(soln_d.begin(), soln_d.end(), Pdot);                                                                                                  // TODO: Is it not possible to copy soln_d directly to Pdot_d or use Pdot_d instead of soln_d not not define soln_d at all?
    cudaStatus = cudaMemcpy(Pdot_d, Pdot, NNp * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error100.1: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    
+   // CONTROL
+   //for(int i = 0; i < NNp; i++) {
+   //   cout << Pdot[i] << endl;
+   //}
+
 }  // End of function CUSP_CG_solver()
 
 

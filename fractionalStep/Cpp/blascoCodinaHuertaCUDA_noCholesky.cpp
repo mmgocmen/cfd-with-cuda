@@ -31,8 +31,12 @@
 #include <algorithm>
 #include <vector>
 #include "mkl_types.h"
+#include "mkl_rci.h"
+#include "mkl_blas.h"
 #include "mkl_spblas.h"
 #include "mkl_service.h"
+
+//extern "C" void mkl_freebuffers();
 
 #ifdef USECUDA
    #include <cuda_runtime.h>
@@ -69,6 +73,7 @@ ifstream inpFile;            // Input file with INP extension.
 ifstream problemNameFile;    // Input file name is read from this ProblemName.txt file.
 ofstream datFile;            // Output file with DAT extension.
 FILE *ZcholFile;             // Cholesky factorization details of [Z] are written to (and read from) this file.
+FILE *Zfile;
 
 string whichProblem;
 
@@ -165,6 +170,13 @@ int *Z_chol_Lp, *Z_chol_Li;
 double *Z_chol_Lx;
 int *Z_sym_pinv;
 int Z_chol_L_NZMAX;
+
+
+// Used by MKL_CG
+int Z_NNZupper, *Z_rowStartsUpper,  *Z_colIndicesUpper;
+double *Z_valuesUpper;
+
+
 
 int ***sparseMapM;      // Maps each element's local M, K, A entries to the global ones that are stored in sparse format.
 int ***sparseMapG;      // Maps each element's local G entries to the global ones that are stored in sparse format.
@@ -267,6 +279,7 @@ void readZcholFromFile();
 void step1(int);
 void step2(int);
 void step3(int);
+void MKL_CG_solver(int);
 void applyBC_initial();
 void applyBC_Step1(int);
 void applyBC_Step2(int);
@@ -3089,12 +3102,16 @@ void step0()
    //   cout << MdInv[i] << endl;
    //}
    
-   calculateZ_CUSP();
+   #ifdef USECUDA
+      calculateZ_CUSP();
+   #endif
    
-   cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
-   cout << endl;
-   cout << "At the end of step2() function" << endl;
-   cout << "   Free GPU memory =  " << freeGPUmemory << endl;
+   #ifdef USECUDA
+      cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
+      cout << endl;
+      cout << "At the end of step2() function" << endl;
+      cout << "   Free GPU memory =  " << freeGPUmemory << endl;
+   #endif
 
 }  // End of function step0()
 
@@ -3132,7 +3149,8 @@ void writeZcholToFile()
         << "   Press Ctrl-C.\n\n"
         << "   Press Ctrl-C.\n\n";
    cin >> dummyUserInput;
-}
+
+}  // End of function writeZcholToFile()
 
 
 
@@ -3498,8 +3516,11 @@ void step2(int iter)
 
 
    
-   
+   // Solve for Pdot using MKL's CG solver.
+   MKL_CG_solver(iter);
 
+
+/*
    // Solve for Pdot using Cholesky factorization obtained in step 0.
    // Reference: Timothy Davis' book, page 136
    for (int i = 0; i < NNp; i++) {
@@ -3531,6 +3552,7 @@ void step2(int iter)
    cs_pvec(Z_sym_pinv, x, Pdot, NNp);
 
    cs_free(x);
+*/
 
    // CONTROL
    //for (int i=0; i<NNp; i++) {
@@ -3632,6 +3654,162 @@ void step3(int iter)
    delete[] pointerE;
 
 }  // End of function step3()
+
+
+
+
+
+//========================================================================
+void MKL_CG_solver(int iter)
+//========================================================================
+{
+   // Solve the system of step 2 [Z]{Pdot}={R2} using CG.
+
+   // Try to open the Zchol file to check whether it exists or not.
+   // Do this only in the first iteration of the first time step.
+   if (timeN == 1 && iter == 1) {
+      Zfile = fopen((whichProblem + ".zCSR").c_str(), "rb");
+   
+      if (Zfile == NULL) {   // File does not exist
+         cout << "\n\n\n  .zCSR file doe not exist. first run the code by defining USECUDA and create that file.\n\n\n.";
+         cout << "  Press Ctrl-C to quit.\n\n";
+         cout << "  Press Ctrl-C to quit.\n\n";
+         cout << "  Press Ctrl-C to quit.\n\n";
+      } else {
+         size_t dummy;   // Used to prevent warnings about fread function not returning a value.
+         int Z_NNZ;
+         int *Z_rowStarts, *Z_colIndices;
+         double *Z_values;
+
+         Zfile = fopen((whichProblem + ".zCSR").c_str(), "rb");
+   
+         dummy = fread(&Z_NNZ, sizeof(int), size_t(1), Zfile);
+         
+         Z_rowStarts  = new int[NNp + 1];
+         Z_colIndices = new int[Z_NNZ];
+         Z_values     = new double[Z_NNZ];
+
+         dummy = fread(Z_rowStarts,  sizeof(int),    size_t(NNp+1), Zfile);
+         dummy = fread(Z_colIndices, sizeof(int),    size_t(Z_NNZ), Zfile);
+         dummy = fread(Z_values,     sizeof(double), size_t(Z_NNZ), Zfile);
+
+         // CONTROL
+         //for(int i=0; i<NNp+1; i++) {
+         //   cout << Z_rowStarts[i] << endl;
+         //}
+         //for(int i=0; i<Z_NNZ; i++) {
+         //   cout << Z_colIndices[i] << endl;
+         //}
+         //for(int i=0; i<Z_NNZ; i++) {
+         //   cout << Z_values[i] << endl;
+         //}
+
+         fclose(Zfile);
+
+
+         // MKL solvers need only the upper triangle of the symmetric matrices.
+         // So let's find them.
+         // Also they use 1-based indexing.
+
+         Z_NNZupper = NNp + (Z_NNZ - NNp) / 2;
+         Z_rowStartsUpper  = new int[NNp+1];
+         Z_colIndicesUpper = new int[Z_NNZupper];
+         Z_valuesUpper     = new double[Z_NNZupper];
+
+         Z_rowStartsUpper[0] = 1;
+
+         int counter = 0;  // Counter for the nonzeros on the upper half
+
+         for(int r = 0; r < NNp; r++) {  // Row loop
+            for(int c = Z_rowStarts[r]; c < Z_rowStarts[r+1]; c++) {  // Nonzero column loop
+               if(Z_colIndices[c] >= r) {  // These are on the upper half
+                  Z_colIndicesUpper[counter] = Z_colIndices[c] + 1;
+                  Z_valuesUpper[counter] = Z_values[c];
+                  counter++;
+               }
+            }
+            Z_rowStartsUpper[r+1] = counter + 1;
+         }
+
+         // CONTROL
+         //for(int i=0; i<NNp+1; i++) {
+         //   cout << Z_rowStartsUpper[i] << endl;
+         //}
+         //for(int i=0; i<Z_NNZupper; i++) {
+         //   cout << Z_colIndicesUpper[i] << endl;
+         //}
+         //for(int i=0; i<Z_NNZupper; i++) {
+         //   cout << Z_valuesUpper[i] << endl;
+         //}
+
+         delete[] Z_rowStarts;
+         delete[] Z_colIndices;
+         delete[] Z_values;
+
+      }  // End of Zfile == NULL check
+
+   }  // End of timeN and iter check
+
+
+   MKL_INT n, rci_request;
+   n = NNp;
+
+   MKL_INT ipar[128];
+   double dpar[128], *tmp;
+   tmp = new double[4*n];
+   char tr = 'u';
+
+   // Initialize the solution to zero
+   for (int i = 0; i < NNp; i++) {
+      Pdot[i] = 0.0;
+   }
+
+   dcg_init (&n, Pdot, R2, &rci_request, ipar, dpar, tmp);
+   if (rci_request != 0) {
+      printf("This example FAILED as the solver has returned the ERROR code %d\n\n", rci_request);
+      MKL_Free_Buffers();
+      return;
+   }
+
+   ipar[4] = 1000;    // Max. iteration number. Default is max(150,n)
+   ipar[7] = 1;       // Perform iteration number based stopping check. Default is 1.
+   ipar[8] = 1;       // Perform residual based stopping check. Default is 0.
+   ipar[9] = 0;       // Do not perform user specified stopping check. Default is 1.
+   dpar[0] = 1e-10;   // Relative tolerance. Default is 1e-6.
+
+   int solverIter;
+
+   dcg_check (&n, Pdot, R2, &rci_request, ipar, dpar, tmp);
+   if (rci_request != 0) {
+      printf("This example FAILED as the solver has returned the ERROR code %d\n\n", rci_request);
+      MKL_Free_Buffers();
+      return;
+   }
+
+   rci:dcg (&n, Pdot, R2, &rci_request, ipar, dpar, tmp);
+   if (rci_request == 0) {   // The solution is found with the required precision
+      dcg_get (&n, Pdot, R2, &rci_request, ipar, dpar, tmp, &solverIter);
+      cout << "MKL_CG converged after " << solverIter << " iterations." << endl;
+      MKL_Free_Buffers();
+      goto out;
+   } else if (rci_request == 1) { // Compute the vector A*tmp[0] and put the result in vector tmp[n]
+      mkl_dcsrsymv (&tr, &n, Z_valuesUpper, Z_rowStartsUpper, Z_colIndicesUpper, tmp, &tmp[n]);
+      goto rci;
+   } else {  // If rci_request=anything else, then dcg subroutine failed
+      printf("This example FAILED as the solver has returned the ERROR code %d\n\n", rci_request);
+      MKL_Free_Buffers();
+      return;
+   }
+
+   out:
+   // CONTROL
+   //for(int i = 0; i < NNp; i++) {
+   //   cout << Pdot[i] << endl;
+   //}
+
+   delete[] tmp;
+
+}  // End of function MKL_CG_solver()
 
 
 
