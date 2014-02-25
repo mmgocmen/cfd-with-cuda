@@ -227,7 +227,7 @@ void CUSP_CG_solver()
    //cusp::precond::scaled_bridson_ainv<double, cusp::device_memory> M(Z_CUSP_CSR_d, .1);
    //cusp::precond::aggregation::smoothed_aggregation<int, double, cusp::device_memory> M(Z_CUSP_CSR_d);
 
-   cusp::krylov::cg(Z_CUSP_CSR_d, soln_d, RHS_d, monitor);
+   cusp::krylov::cg(Z_CUSP_CSR_d, soln_d, RHS_d, monitor, M);
    
    cout << "CG solver made " << monitor.iteration_count() << " iterations. Residual norm is " << monitor.residual_norm() << endl;
 
