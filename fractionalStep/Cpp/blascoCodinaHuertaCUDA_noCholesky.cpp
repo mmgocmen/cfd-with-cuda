@@ -3664,14 +3664,15 @@ void MKL_CG_solver(int iter)
 //========================================================================
 {
    // Solve the system of step 2 [Z]{Pdot}={R2} using CG.
+   // Reference: CG and PCG examples coming with Intel MKL.
 
    // Try to open the Zchol file to check whether it exists or not.
-   // Do this only in the first iteration of the first time step.
+   // Do this only for the first iteration of the first time step.
    if (timeN == 1 && iter == 1) {
       Zfile = fopen((whichProblem + ".zCSR").c_str(), "rb");
    
       if (Zfile == NULL) {   // File does not exist
-         cout << "\n\n\n  .zCSR file doe not exist. first run the code by defining USECUDA and create that file.\n\n\n.";
+         cout << "\n\n\n  .zCSR file does not exist. first run the code by defining USECUDA and create that file.\n\n\n.";
          cout << "  Press Ctrl-C to quit.\n\n";
          cout << "  Press Ctrl-C to quit.\n\n";
          cout << "  Press Ctrl-C to quit.\n\n";
@@ -3758,6 +3759,12 @@ void MKL_CG_solver(int iter)
    double dpar[128], *tmp;
    tmp = new double[4*n];
    char tr = 'u';
+   char matdes[3];
+   double one = 1.000000000000000;
+
+   matdes[0] = 'd';
+   matdes[1] = 'l';
+   matdes[2] = 'n';
 
    // Initialize the solution to zero
    for (int i = 0; i < NNp; i++) {
@@ -3794,6 +3801,9 @@ void MKL_CG_solver(int iter)
       goto out;
    } else if (rci_request == 1) { // Compute the vector A*tmp[0] and put the result in vector tmp[n]
       mkl_dcsrsymv (&tr, &n, Z_valuesUpper, Z_rowStartsUpper, Z_colIndicesUpper, tmp, &tmp[n]);
+      goto rci;
+   } else if (rci_request == 3) { // Apply the preconditioner matrix C_inverse on vector tmp[2*n] and put the result in vector tmp[3*n]
+      mkl_dcsrsv (&matdes[2], &n, &one, matdes, Z_valuesUpper, Z_colIndicesUpper, Z_rowStartsUpper, &Z_rowStartsUpper[1], &tmp[2*n], &tmp[3*n]);
       goto rci;
    } else {  // If rci_request=anything else, then dcg subroutine failed
       printf("This example FAILED as the solver has returned the ERROR code %d\n\n", rci_request);
