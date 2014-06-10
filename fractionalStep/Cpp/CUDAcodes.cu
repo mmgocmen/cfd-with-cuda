@@ -1,3 +1,10 @@
+// TODO: After the run is finished the executable terminates with the following  error.                                                               // TODO
+// terminate called after throwing an instance of 'thrust::system::system_error'
+//   what():  unload of CUDA runtime failed
+// Aborted (core dumped)
+
+// Everything in this file is used only if compiled with USEDUDA defined
+
 #ifdef USECUDA
 
 #include <iostream>
@@ -20,6 +27,10 @@
 #include <cusp/elementwise.h>
 
 
+int NBLOCKS = 128;
+int NTHREADS = 1024;
+
+
 using namespace std;
 
 #ifdef SINGLE
@@ -28,11 +39,11 @@ using namespace std;
   typedef double REAL;
 #endif
 
-extern int NN, NNp, sparseM_NNZ, sparseG_NNZ, *sparseMrowStarts, *sparseMcol, BCnVelNodes, zeroPressureNode, Z_chol_L_NZMAX, timeN, monPoint;
-extern double dt, timeT, t_ini, tolerance, *sparseAvalue, *sparseKvalue, *UnpHalf_prev, *Pn, *R1, *R11, *R12, *R13, *R2, *Un, *UnpHalf, *KtimesAcc_prev, *Acc_prev, *Acc, *MdOrigInv, *Unp1, *Pnp1, *Pdot;
+extern int NN, NNp, sparseM_NNZ, sparseG_NNZ, *sparseMrowStarts, *sparseGrowStarts, *sparseMrow, *sparseMcol, BCnVelNodes, zeroPressureNode, timeN, monPoint;
+extern int ** BCvelNodes;
+extern double dt, timeT, t_ini, tolerance, *sparseAvalue, *sparseKvalue, *UnpHalf_prev, *Pn, *R1, *R11, *R12, *R13, *R2, *Un, *UnpHalf, *KtimesAcc_prev, *Acc_prev, *Acc, *MdInv, *MdOrigInv, *Unp1, *Pnp1, *Pdot;
 extern char dummyUserInput;
 extern string whichProblem;
-extern FILE *Zfile;
 
 extern double *K_d, *A_d, *G1_d, *G2_d, *G3_d;
 extern double *MdInv_d, *Un_d, *Pn_d, *Pnp1_d, *Pnp1_prev_d;
@@ -44,8 +55,6 @@ extern double *Acc_prev_d;
 extern double *KtimesAcc_prev_d;
 extern int *Mcol_d, *Mrow_d, *MrowStarts_d, *Gcol_d, *Grow_d, *GrowStarts_d;
 extern int *BCvelNodes_d;
-extern int *Z_sym_pinv_d, *Z_chol_Lp_d, *Z_chol_Li_d;
-extern double *Z_chol_Lx_d;
 
 extern cusparseHandle_t   handle;
 extern cusparseMatDescr_t descr;
@@ -53,17 +62,152 @@ extern cublasHandle_t     handleCUBLAS;
 extern cudaError_t        cudaStatus;
 
 extern cusparseSolveAnalysisInfo_t analysisInfo1, analysisInfo2;
-extern double getHighResolutionTime(int, double);
-
-
 
 extern int *sparseGrow, *sparseGcol;
 extern double *sparseG1value, *sparseG2value, *sparseG3value;
 
-
-
 extern size_t freeGPUmemory, totalGPUmemory;   // To measure total and free GPU memory
 cusp::csr_matrix<int, double, cusp::device_memory> Z_CUSP_CSR_d;
+
+extern bool PRINT_TIMES;
+
+extern double getHighResolutionTime(int, double);
+extern void createTecplot();
+
+
+
+
+
+//========================================================================
+void selectCUDAdevice()
+//========================================================================
+{
+   // Print information about available CUDA devices set the CUDA device to be used
+   cudaDeviceProp prop;
+   int nDevices;
+      
+   cout << "Available CUDA devices are" << endl;
+   cudaGetDeviceCount(&nDevices);
+   
+   for (int i = 0; i < nDevices; i++) {
+     cudaGetDeviceProperties(&prop, i);
+     printf("  %d: %s\n", i, prop.name);
+   }
+
+   if (nDevices == 1) {                                                                                                                            // TODO : This will not work on every machine.
+      cudaSetDevice(0);
+      cout << "\nDevice " << 0 << " is selected.\n";
+   } else {
+	  cudaSetDevice(nDevices - 1);
+	  //cudaSetDevice(0);
+	  cout << "\nDevice " << nDevices - 1 << " is selected.\n";
+   } 
+      
+   cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
+   cout << "  Total GPU memory = " << totalGPUmemory << endl;
+   cout << "  Free  GPU memory = " << freeGPUmemory << endl << endl;
+
+}  // End of function selectCUDAdevice()
+
+
+
+
+
+//========================================================================
+void initializeAndAllocateGPU()
+//========================================================================
+{
+   // Do the necessary memory allocations for the GPU. Apply the initial
+   // condition or read the restart file.
+
+   handle = 0;
+   descr  = 0;
+   
+   // Initialize cusparse library
+   cusparseCreate(&handle);
+   cublasCreate(&handleCUBLAS);
+
+   // Create and setup matrix descriptor
+   cusparseCreateMatDescr(&descr);
+
+   cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
+   cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
+
+
+   int NNZM = sparseM_NNZ / 3;
+   int NNZG = sparseG_NNZ / 3;
+
+   cudaStatus = cudaMalloc((void**)&K_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error01: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&A_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error02: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&G1_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error03: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&G2_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error04: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&G3_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error05: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&UnpHalf_prev_d,   3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error06: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&KtimesAcc_prev_d, 3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error07: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Acc_d,            3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error08: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Acc_prev_d,       3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error09: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Pn_d,             NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error10: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Pnp1_d,           NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error11: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Pnp1_prev_d,      NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error12: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Pdot_d,           NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error13: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   
+   cudaStatus = cudaMalloc((void**)&Mrow_d,           NNZM   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error14: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Mcol_d,           NNZM   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error15: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&MrowStarts_d,     (NN+1) * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error16: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Grow_d,           NNZG   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error17: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Gcol_d,           NNZG   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error18: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&GrowStarts_d,     (NN+1) * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error19: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
+   cudaStatus = cudaMalloc((void**)&BCvelNodes_d,     BCnVelNodes * sizeof(int)); if(cudaStatus != cudaSuccess) { printf("Error20: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
+   cudaStatus = cudaMalloc((void**)&MdOrigInv_d,      3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error21: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&MdInv_d,          3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error22: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Un_d,             3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error23: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Unp1_d,           3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error24: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&Unp1_prev_d,      3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error25: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&UnpHalf_d,        3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error26: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&R1_d,             3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error27: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&R2_d,             NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error28: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&R3_d,             3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error29: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
+   cudaStatus = cudaMemcpy(MrowStarts_d, sparseMrowStarts, (NN+1) * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error30: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(K_d,          sparseKvalue,     NNZM   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error31: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(Mrow_d,       sparseMrow,       NNZM   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error32: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(Mcol_d,       sparseMcol,       NNZM   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error33: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(G1_d,         sparseG1value,    NNZG   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error34: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(G2_d,         sparseG2value,    NNZG   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error35: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(G3_d,         sparseG3value,    NNZG   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error36: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   
+   cudaStatus = cudaMemcpy(Grow_d,       sparseGrow,       NNZG   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error37: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(Gcol_d,       sparseGcol,       NNZG   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error38: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(GrowStarts_d, sparseGrowStarts, (NN+1) * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error39: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
+   cudaStatus = cudaMemcpy(MdInv_d,       MdInv,           3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error40: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(MdOrigInv_d,   MdOrigInv,       3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error41: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+      
+
+   // Extract the 1st column of BCvelNodes and send it to the device.
+   int *dummy;
+   dummy = new int[BCnVelNodes];
+   for(int i = 0; i < BCnVelNodes; i++) {
+      dummy[i] = BCvelNodes[i][0];
+   }
+   cudaStatus = cudaMemcpy(BCvelNodes_d, dummy,  BCnVelNodes * sizeof(int), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error42: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   delete[] dummy;
+
+
+   // Send Un to the GPU
+   cudaStatus = cudaMemcpy(Un_d, Un, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(Pn_d, Pn, NNp  * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
+
+   cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
+   cout << endl;
+   cout << "After initializeAndAllocateGPU() function, free GPU memory = " << freeGPUmemory << endl;
+
+}  // End of function initializeAndAllocateGPU()
+
+
 
 
 
@@ -158,17 +302,17 @@ void calculateZ_CUSP()
    
    // CONTROL
    //cusp::print(Z_CUSP_CSR);
-   cout << endl << "                                                  NNZ of Z_CUSP_CSR = " << Z_CUSP_CSR.num_entries << endl;
+   cout << endl << " NNZ of Z_CUSP_CSR = " << Z_CUSP_CSR.num_entries << endl;
 
    cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
    cout << endl;
-   cout << "At the end of calculateZ_CUSP() function" << endl;
-   cout << "   Free GPU memory =  " << freeGPUmemory << endl;
+   cout << "At the end of calculateZ_CUSP() function, free GPU memory = " << freeGPUmemory << endl;
 
 
    
+   /*
    // Write Z_CUSP_CSR matrix to a file for further use by the MKL_CG solver in a different run.
-   Zfile = fopen((whichProblem + ".zCSR").c_str(), "wb");
+   ZcsrFile = fopen((whichProblem + ".zCSR").c_str(), "wb");
 
    int *rowOffsets, *colIndices;
    double *values;
@@ -186,16 +330,17 @@ void calculateZ_CUSP()
       values[i] = Z_CUSP_CSR.values[i];
    }
 
-   fwrite(&Z_CUSP_CSR.num_entries, sizeof(int),    size_t(1),                      Zfile);
-   fwrite(rowOffsets,              sizeof(int),    size_t(NNp+1),                  Zfile);
-   fwrite(colIndices,              sizeof(int),    size_t(Z_CUSP_CSR.num_entries), Zfile);
-   fwrite(values,                  sizeof(double), size_t(Z_CUSP_CSR.num_entries), Zfile);
+   fwrite(&Z_CUSP_CSR.num_entries, sizeof(int),    size_t(1),                      ZcsrFile);
+   fwrite(rowOffsets,              sizeof(int),    size_t(NNp+1),                  ZcsrFile);
+   fwrite(colIndices,              sizeof(int),    size_t(Z_CUSP_CSR.num_entries), ZcsrFile);
+   fwrite(values,                  sizeof(double), size_t(Z_CUSP_CSR.num_entries), ZcsrFile);
    
-   fclose(Zfile);
+   fclose(ZcsrFile);
 
    delete[] rowOffsets;
    delete[] colIndices;
    delete[] values;
+   */
 
 }  // End of function calculateZ_CUSP()
 
@@ -229,7 +374,7 @@ void CUSP_CG_solver()
 
    cusp::krylov::cg(Z_CUSP_CSR_d, soln_d, RHS_d, monitor, M);
    
-   cout << "CG solver made " << monitor.iteration_count() << " iterations. Residual norm is " << monitor.residual_norm() << endl;
+   if (PRINT_TIMES) cout << "CUSP CG solver made " << monitor.iteration_count() << " iterations. Residual norm is " << monitor.residual_norm() << endl;
 
                                                                                                                                                       // TODO: Try to minimize host-device memory transfers
    thrust::copy(soln_d.begin(), soln_d.end(), Pdot);                                                                                                  // TODO: Is it not possible to copy soln_d directly to Pdot_d or use Pdot_d instead of soln_d not not define soln_d at all?
@@ -512,7 +657,7 @@ void step1GPUpart(void)
    applyVelBC<<<1,1>>>(BCnVelNodes, NN, BCvelNodes_d, R1_d);
 
    // Calculate UnpHalf
-   calculate_UnpHalf<<<256,256>>>(3*NN, dt, UnpHalf_d, Un_d, R1_d, MdInv_d);
+   calculate_UnpHalf<<<NBLOCKS,NTHREADS>>>(3*NN, dt, UnpHalf_d, Un_d, R1_d, MdInv_d);
 
 }  // End of function step1GPUpart()
 
@@ -537,9 +682,9 @@ void step2GPU(int iter)
    double oneOverdt2 = 1.0000000000000000 / (dt*dt);
 
    if (iter == 1) {
-      calculate_step2dummyV1<<<256,256>>>(3*NN, oneOverdt2, dummy_d, UnpHalf_d);
+      calculate_step2dummyV1<<<NBLOCKS,NTHREADS>>>(3*NN, oneOverdt2, dummy_d, UnpHalf_d);
    } else {
-      calculate_step2dummyV2<<<256,256>>>(3*NN, oneOverdt2, dummy_d, UnpHalf_d, MdOrigInv_d, KtimesAcc_prev_d);
+      calculate_step2dummyV2<<<NBLOCKS,NTHREADS>>>(3*NN, oneOverdt2, dummy_d, UnpHalf_d, MdOrigInv_d, KtimesAcc_prev_d);
    }
 
    // Multiply Gt with the previously calculated dummy arrays.
@@ -559,7 +704,7 @@ void step2GPU(int iter)
 
    CUSP_CG_solver();  // Calculate Pdot
 
-   calculate_Pnp1<<<256,256>>>(NNp, dt, Pnp1_d, Pn_d, Pdot_d);        // Pnp1 = Pn + dt * Pdot                                                       // TODO: Use CUBLAS function
+   calculate_Pnp1<<<NBLOCKS,NTHREADS>>>(NNp, dt, Pnp1_d, Pn_d, Pdot_d);        // Pnp1 = Pn + dt * Pdot                                                       // TODO: Use CUBLAS function
    
    cudaFree(dummy_d);
    
@@ -588,16 +733,16 @@ void step3GPU(int iter)
 
    // Subtract dt * KtimesAcc_prev from R3 if iter is not 1.
    if (iter != 1) {
-      calculate_R3<<<256,256>>>(3*NN, dt, R3_d, KtimesAcc_prev_d);
+      calculate_R3<<<NBLOCKS,NTHREADS>>>(3*NN, dt, R3_d, KtimesAcc_prev_d);
    }
 
    applyVelBC<<<1,1>>>(BCnVelNodes, NN, BCvelNodes_d, R3_d);
 
    // Calculate Acc (Acc = R3 * MdInv)
-   multiplyVectors<<<256,256>>>(3*NN, Acc_d, R3_d, MdInv_d);                                                                                         // TODO: Use CUBLAS function
+   multiplyVectors<<<NBLOCKS,NTHREADS>>>(3*NN, Acc_d, R3_d, MdInv_d);                                                                                         // TODO: Use CUBLAS function
    
    // Calculate Unp1 (Unp1 = UnpHalf + dt * Acc)
-   calculate_Unp1<<<256,256>>>(3*NN, dt, Unp1_d, UnpHalf_d, Acc_d);                                                                                  // TODO: Use CUBLAS function
+   calculate_Unp1<<<NBLOCKS,NTHREADS>>>(3*NN, dt, Unp1_d, UnpHalf_d, Acc_d);                                                                                  // TODO: Use CUBLAS function
 
    cudaStatus = cudaMemcpy(Unp1, Unp1_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error107: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    
@@ -637,7 +782,7 @@ bool checkConvergenceGPU(void)
    double *dummy_d;
    cudaStatus = cudaMalloc((void**)&dummy_d, 3*NN * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error108: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }   // dummy_d will store (Unp1_d - Unp1_prev_d)
 
-   subtractVectors<<<256,256>>>(3*NN, dummy_d, Unp1_d, Unp1_prev_d);
+   subtractVectors<<<NBLOCKS,NTHREADS>>>(3*NN, dummy_d, Unp1_d, Unp1_prev_d);
    cublasDnrm2(handleCUBLAS, 3*NN, dummy_d, 1, &norm2);   // norm2 = sqrt(sum((Unp1(i)-Unp_prev(i))*(Unp1(i)-Unp_prev(i))))
    normalizedNorm1 = norm2 / norm1;                       // Normalized norm for velocity
 
@@ -649,7 +794,7 @@ bool checkConvergenceGPU(void)
 
    cudaStatus = cudaMalloc((void**)&dummy_d, NNp * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error109: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }    // dummy_d will now store (Pnp1_d - Pnp1_prev_d)
 
-   subtractVectors<<<256,256>>>(NNp, dummy_d, Pnp1_d, Pnp1_prev_d);
+   subtractVectors<<<NBLOCKS,NTHREADS>>>(NNp, dummy_d, Pnp1_d, Pnp1_prev_d);
    cublasDnrm2(handleCUBLAS, NNp, dummy_d, 1, &norm2);   // norm2 = sqrt(sum((Pnp1(i)-Pnp_prev(i))*(Pnp1(i)-Pnp_prev(i))))
    normalizedNorm2 = norm2 / norm1;                      // Normalized norm for pressure
 
@@ -684,62 +829,7 @@ void printMonitorDataGPU(int iter)
    cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error110: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error111: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
-   printf("\n%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n", timeN, iter, timeT, Un[monPoint], Un[monPoint + NN], Un[monPoint + 2*NN], Pn[monPoint]);
+   printf("%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n", timeN, iter, timeT, Un[monPoint], Un[monPoint + NN], Un[monPoint + 2*NN], Pn[monPoint]);
 }  // End of function printMonitorDataGPU()
-
-
-
-
-
-/*
-//========================================================================
-void choleskyAnalysisGPU()
-//========================================================================
-{
-   // Perform the analysis part of the Cholesky factorization only once
-   // before the time loop. But this function is not used because, surprisingly
-   // it takes more time than performing the analyses again again when they
-   // are needed.
- 
-   cusparseCreateSolveAnalysisInfo(&analysisInfo1);
-   cusparseCreateSolveAnalysisInfo(&analysisInfo2);
-   
-   cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_TRIANGULAR);
-   cusparseSetMatFillMode(descr, CUSPARSE_FILL_MODE_UPPER);
-   cusparseSetMatDiagType(descr, CUSPARSE_DIAG_TYPE_NON_UNIT);
-   
-   //cusparseStatus_t status;
-   
-   cusparseDcsrsv_analysis(handle, CUSPARSE_OPERATION_TRANSPOSE,     NNp, Z_chol_L_NZMAX, descr, Z_chol_Lx_d, Z_chol_Lp_d, Z_chol_Li_d, analysisInfo1);  // Analysis of the 1st triangular solver
-   
-   
-   //switch(status)
-   //{
-   //   case CUSPARSE_STATUS_SUCCESS:          cout << "\n\n1CUSPARSE_STATUS_SUCCESS\n\n";
-   //   case CUSPARSE_STATUS_NOT_INITIALIZED:  cout << "1CUSPARSE_STATUS_NOT_INITIALIZED\n\n";
-   //   case CUSPARSE_STATUS_ALLOC_FAILED:     cout << "1CUSPARSE_STATUS_ALLOC_FAILED\n\n";
-   //   case CUSPARSE_STATUS_INVALID_VALUE:    cout << "1CUSPARSE_STATUS_INVALID_VALUE\n\n"; 
-   //   case CUSPARSE_STATUS_ARCH_MISMATCH:    cout << "1CUSPARSE_STATUS_ARCH_MISMATCH\n\n"; 
-   //   case CUSPARSE_STATUS_MAPPING_ERROR:    cout << "1CUSPARSE_STATUS_MAPPING_ERROR\n\n";
-   //   case CUSPARSE_STATUS_EXECUTION_FAILED: cout << "1CUSPARSE_STATUS_EXECUTION_FAILED\n\n"; 
-   //   case CUSPARSE_STATUS_INTERNAL_ERROR:   cout << "1CUSPARSE_STATUS_INTERNAL_ERROR\n\n"; 
-   //}
-    
-   cusparseDcsrsv_analysis(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NNp, Z_chol_L_NZMAX, descr, Z_chol_Lx_d, Z_chol_Lp_d, Z_chol_Li_d, analysisInfo2);  // Analysis of the 2nd triangular solver
-
-   //switch(status)
-   //{
-   //   case CUSPARSE_STATUS_SUCCESS:          cout << "\n\n1CUSPARSE_STATUS_SUCCESS\n\n";
-   //   case CUSPARSE_STATUS_NOT_INITIALIZED:  cout << "1CUSPARSE_STATUS_NOT_INITIALIZED\n\n";
-   //   case CUSPARSE_STATUS_ALLOC_FAILED:     cout << "1CUSPARSE_STATUS_ALLOC_FAILED\n\n";
-   //   case CUSPARSE_STATUS_INVALID_VALUE:    cout << "1CUSPARSE_STATUS_INVALID_VALUE\n\n"; 
-   //   case CUSPARSE_STATUS_ARCH_MISMATCH:    cout << "1CUSPARSE_STATUS_ARCH_MISMATCH\n\n"; 
-   //   case CUSPARSE_STATUS_MAPPING_ERROR:    cout << "1CUSPARSE_STATUS_MAPPING_ERROR\n\n";
-   //   case CUSPARSE_STATUS_EXECUTION_FAILED: cout << "1CUSPARSE_STATUS_EXECUTION_FAILED\n\n"; 
-   //    case CUSPARSE_STATUS_INTERNAL_ERROR:   cout << "1CUSPARSE_STATUS_INTERNAL_ERROR\n\n";
-   //}
-   
-}  // End of function choleskyAnalysisGPU()
-*/
 
 #endif //USECUDA

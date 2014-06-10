@@ -1,24 +1,90 @@
-//
-//                                                                                                                                                   TODO: For NE=27 mesh, running with F5 in Release mode fails.
-//
-// To be able to use this code you need to define USECUDA during compilation.
-//
-//
+
+/*******************************************************************
+                  3D Unsteady Navier-Stokes Solver
+********************************************************************
+
+          This code is a part of the CFD-with-CUDA project
+               http://code.google.com/p/cfd-with-cuda
+
+                          Dr. Cuneyt Sert
+                Department of Mechanical Engineering
+                  Middle East Technical University
+                           Ankara, Turkey
+                   http://www.metu.edu.tr/~csert
 
 
-/*****************************************************************
-*        This code is a part of the CFD-with-CUDA project        *
-*             http://code.google.com/p/cfd-with-cuda             *
-*                                                                *
-*                        Dr. Cuneyt Sert                         *
-*              Department of Mechanical Engineering              *
-*                Middle East Technical University                *
-*                         Ankara, Turkey                         *
-*                 http://www.metu.edu.tr/~csert                  *
-*                                                                *
-*****************************************************************/
+********************************************************************
+                            FORMULATION
+********************************************************************
+
+  Fractional Step Method described in Blasco, Codina and Huerta's
+  1998 paper is used. Hexahedral elements with 9-node bilinear
+  pressure and 27-node biquadratic velocity approximation are
+  supported.
+
+
+********************************************************************
+                       THIRD PARTY LIBRARIES
+********************************************************************
+  CPU version: CSparse library of Timothy Davis is used in the
+               creation of the [Z] matrix (especially necessary for
+               the sparse matrix-matrix multiplication).
+  
+               In step 2, Intel MKL's Conjugate Gradient solver is
+               used. N_MKL_THREADS variable sets the number of
+               parallel threads used by MKL.
+
+  GPU version: It uses NVIDIA's CUDA Toolkit. CUSP library is used
+               to calculate the [Z] matrix and Conjugate Gradient
+               solution of step 2.
+
+
+********************************************************************
+                      PREPROCESSOR DIRECTIVES
+********************************************************************
+
+  WINDOWS:    Timing functions are different on Windows and Linux.
+              Define WINDOWS to compile on a Windows machine.
+
+  USECUDA:    NVIDIA's CUDA library is used to perform certain
+              tasks on a graphics card (GPU).
+
+
+********************************************************************
+                       INPUT and OUTPUT FILES
+********************************************************************
+
+  INP:     Input file that provides the solution parameters, mesh
+           and boundary conditions. Its location and name is given
+           in the ProblemName.txt file. It includes only corner
+           nodes of the elements, not mid-edge, mid-face or
+           mid-element nodes.
+       
+  DAT:     Output file with velocity components and pressure to be
+           visualized using the Tecplot software.
+  
+
+********************************************************************
+                            SCREEN OUTPUT
+********************************************************************
+
+   During a run velocity and pressure values of a selected monitor
+   point are written on the screen. Monitor point coordinates are
+   read from the input file.
+   
+   Also time taken in each step of the fractional step solver is
+   written on the screen. To stop this set PRINT_TIMES flag to
+   zero.
+
+********************************************************************/
+
+
+
 
 #define _CRT_SECURE_NO_DEPRECATE    // This is necessary to avoid fopen() warning of MSVC.
+int N_MKL_THREADS = 8;              // Number of Intel MKL threads
+bool PRINT_TIMES = 0;               // Set to 1 to see the time taken by each step of the solver on the screen
+
 
 #include <stdio.h>
 #include <string>
@@ -52,7 +118,7 @@
 #endif
 
 
-extern "C" {      // Timothy Davis' CSparse library. Used for Cholesky factorization.
+extern "C" {      // Timothy Davis' CSparse library. Used to calculate [Z] matrix on the CPU.
 #include "cs.h"
 }
 
@@ -72,8 +138,6 @@ using namespace std;
 ifstream inpFile;            // Input file with INP extension.
 ifstream problemNameFile;    // Input file name is read from this ProblemName.txt file.
 ofstream datFile;            // Output file with DAT extension.
-FILE *ZcholFile;             // Cholesky factorization details of [Z] are written to (and read from) this file.
-FILE *Zfile;
 
 string whichProblem;
 
@@ -92,8 +156,8 @@ double t_final;    // Final time
 int timeN;         // Discrete time level
 double timeT;      // Actual time
 
-int    maxIter;    // Maximum iteration for step 3 of the solution.
-double tolerance;  // tolerance for the iterative solution used in step 3
+int    maxIter;    // Maximum iteration number performed inside each time step
+double tolerance;  // Tolerance for the iterations performed in each time step
 
 bool   isRestart;  // Switch that defines if solver continues from a previous
                    // solution or starts from the initial condition
@@ -136,50 +200,43 @@ int *NelemOfVelNodes;     // Number of elements connnected to velocity nodes
 int *NelemOfPresNodes;    // Number of elements connnected to pressure nodes
 
 
-int sparseM_NNZ;        // Counts nonzero entries in i) a single sub-mass matrix and ii) full Mass matrix.
-double *sparseMvalue;   // Nonzero values of the global mass matrix. Actually the values of only the upper-left sub mass matrix are stored.
-int *sparseMcol;        // Nonzero columns of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
-int *sparseMrow;        // Nonzero rows of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
-int *sparseMrowStarts;  // Row start indices of M, K and A matrices (for CSR storage). Info is kept only for the upper-left sub mass matrix.
+int sparseM_NNZ;          // Counts nonzero entries in i) a single sub-mass matrix and ii) full Mass matrix.
+double *sparseMvalue;     // Nonzero values of the global mass matrix. Actually the values of only the upper-left sub mass matrix are stored.
+int *sparseMcol;          // Nonzero columns of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
+int *sparseMrow;          // Nonzero rows of M, K and A matrices. Info is kept only for the upper-left sub mass matrix.
+int *sparseMrowStarts;    // Row start indices of M, K and A matrices (for CSR storage). Info is kept only for the upper-left sub mass matrix.
+int *sparseMrowStartsMod; // A modified version of the above array, used by MKL
 
-double *sparseKvalue;   // Nonzero values of the global K matrix. Actually the values of only the upper-left sub stiffness matrix are stored. [K] has the same sparsity structure as [M].
-double *sparseAvalue;   // Nonzero values of the global A matrix. Actually the values of only the upper-left sub mass matrix are stored. [A] has the same sparsity structure as [M].
+double *sparseKvalue;     // Nonzero values of the global K matrix. Actually the values of only the upper-left sub stiffness matrix are stored. [K] has the same sparsity structure as [M].
+double *sparseAvalue;     // Nonzero values of the global A matrix. Actually the values of only the upper-left sub mass matrix are stored. [A] has the same sparsity structure as [M].
 
-int sparseG_NNZ;        // Counts nonzero entries in i) sub-G matrix and ii) full G matrix.
-double *sparseG1value;  // Nonzero values of the 1st part of the global G matrix.
-double *sparseG2value;  // Nonzero values of the 2nd part of the global G matrix.
-double *sparseG3value;  // Nonzero values of the 3rd part of the global G matrix.
-int *sparseGcol;        // Nonzero columns of only one sub G matrix.
-int *sparseGrow;        // Nonzero rows of only one sub G matrix.
-int *sparseGrowStarts;  // Row start indices of G matrix (for CSR storage).
+int sparseG_NNZ;          // Counts nonzero entries in i) sub-G matrix and ii) full G matrix.
+double *sparseG1value;    // Nonzero values of the 1st part of the global G matrix.
+double *sparseG2value;    // Nonzero values of the 2nd part of the global G matrix.
+double *sparseG3value;    // Nonzero values of the 3rd part of the global G matrix.
+int *sparseGcol;          // Nonzero columns of only one sub G matrix.
+int *sparseGrow;          // Nonzero rows of only one sub G matrix.
+int *sparseGrowStarts;    // Row start indices of G matrix (for CSR storage).
+int *sparseGrowStartsMod; // A modified version of the above array, used by MKL
+
+double *KtimesAcc_prev;   // Multiplication of [K]{Acc_prev}
+
 
 cs *G1_cs, *G2_cs, *G3_cs, *G1_cs_CSC, *G2_cs_CSC, *G3_cs_CSC;    // CSparse storage of sub [G] matrices
 cs *G1t_cs_CSC, *G2t_cs_CSC, *G3t_cs_CSC;                         // CSparse storage of tranposes of sub [G] matrices
 
-double *KtimesAcc_prev; // [K]{Acc_prev}.
-
-
-// These are used when Cholesky factorization of [Z] is first calculated and written to a file.
-cs *Z_cs;               // [Z] matrix.
-css *Z_sym;             // Symbolic analysis of [Z] using the CSparse library. Will be calculated in step0, and used in step2.
-csn *Z_chol;            // Cholesky factorization of [Z] using the CSparse library. Will be calculated in step0, and used in step2.
-
-// These are used Cholesky factorization of [Z] is read from a file.
-cs *Z_chol_L;           // Lower part of Cholesky factorization of [Z].
-int *Z_chol_Lp, *Z_chol_Li;
-double *Z_chol_Lx;
-int *Z_sym_pinv;
-int Z_chol_L_NZMAX;
+cs *Z_cs;                 // [Z] matrix calculated by CSparse library.
+cs *Z_csSorted;           // [Z] matrix with columns indices sorted in ascending order.
 
 
 // Used by MKL_CG
-int Z_NNZupper, *Z_rowStartsUpper,  *Z_colIndicesUpper;
+int Z_NNZupper, *Z_rowStartsUpper, *Z_colIndicesUpper;
 double *Z_valuesUpper;
 
 
 
-int ***sparseMapM;      // Maps each element's local M, K, A entries to the global ones that are stored in sparse format.
-int ***sparseMapG;      // Maps each element's local G entries to the global ones that are stored in sparse format.
+int ***sparseMapM;        // Maps each element's local M, K, A entries to the global ones that are stored in sparse format.
+int ***sparseMapG;        // Maps each element's local G entries to the global ones that are stored in sparse format.
 
 double **GQpoint, *GQweight; // GQ points and weights.
 
@@ -219,24 +276,19 @@ double *R31, *R32, *R33;
 
 char dummyUserInput;      // Used for debugging
 
-//double *dummy3NN, *dummyNNp;   // Dummy variables used for GPU-CPU memory exchange.
-
 
 
 // CUDA DEVICE variables. Their names end with "_d".
 #ifdef USECUDA
-   
    double *K_d, *A_d, *G1_d, *G2_d, *G3_d;
    double *MdInv_d, *MdOrigInv_d;
-   int *Mcol_d, *Mrow_d, *MrowStarts_d, *Gcol_d, *Grow_d, *GrowStarts_d;
+   int    *Mcol_d, *Mrow_d, *MrowStarts_d, *Gcol_d, *Grow_d, *GrowStarts_d;
    double *Un_d, *Unp1_d, *Unp1_prev_d, *UnpHalf_d, *UnpHalf_prev_d;
    double *Pn_d, *Pnp1_d, *Pnp1_prev_d, *Pdot_d; 
    double *R1_d, *R2_d, *R3_d;
    double *Acc_d, *Acc_prev_d;
-   int *Z_sym_pinv_d, *Z_chol_Lp_d, *Z_chol_Li_d;
-   double *Z_chol_Lx_d;
    double *KtimesAcc_prev_d;
-   int *BCvelNodes_d; // Only the first column of BCvelNodes is necessary on the GPU;
+   int    *BCvelNodes_d;  // Only the first column of BCvelNodes is necessary on the GPU
 
    cusparseHandle_t            handle;
    cusparseMatDescr_t          descr;
@@ -273,9 +325,9 @@ void readRestartFile();
 void createTecplot();
 void timeLoop();
 void step0();
-void calculateZ_CUSP();
-void writeZcholToFile();
-void readZcholFromFile();
+void calculateZ();
+void extractUpperTriangularPartOfZ();
+void calculateMatrixA();
 void step1(int);
 void step2(int);
 void step3(int);
@@ -286,17 +338,18 @@ void applyBC_Step2(int);
 void applyBC_Step3();
 void waitForUser(string);
 
-
-// Functions that call GPU kernels.
-void initializeAndAllocateGPU();
-void choleskyAnalysisGPU();
-void step1GPUpart();
-void step2GPU(int);
-void step3GPU(int);
-void calculate_KtimesAcc_prevGPU();
-bool checkConvergenceGPU();
-void printMonitorDataGPU(int);
-
+// Functions that are used when USECUDA option is defined.
+#ifdef USECUDA
+   void selectCUDAdevice();
+   void initializeAndAllocateGPU();
+   void calculateZ_CUSP();
+   void step1GPUpart();
+   void step2GPU(int);
+   void step3GPU(int);
+   void calculate_KtimesAcc_prevGPU();
+   bool checkConvergenceGPU();
+   void printMonitorDataGPU(int);
+ #endif
 
 
 
@@ -306,53 +359,28 @@ int main()
 //========================================================================
 {
    cout << "\n\n*********************************************************";
-   cout << "\n*    3D Unsteady Incompressible Navier-Stokes Solver    *";
-   cout << "\n*        Formulation of Blasco, Codina & Huerta         *";
-   cout << "\n*             Part of CFD with CUDA project             *";
-   cout << "\n*                    Dr. Cuneyt Sert                    *";
-   cout << "\n*        http://code.google.com/p/cfd-with-cuda         *";
-   cout << "\n*********************************************************\n\n";
+   cout <<   "\n*    3D Unsteady Incompressible Navier-Stokes Solver    *";
+   cout <<   "\n*        Formulation of Blasco, Codina & Huerta         *";
+   cout <<   "\n*             Part of CFD-with-CUDA project             *";
+   cout <<   "\n*                    Dr. Cuneyt Sert                    *";
+   cout <<   "\n*        http://code.google.com/p/cfd-with-cuda         *";
+   cout <<   "\n*********************************************************\n\n";
 
    waitForUser("Just started. Enter a character... ");
 
 
-
-   // Print information about available CUDA devices set the CUDA device to be used
    #ifdef USECUDA
-      cudaDeviceProp prop;
-      int nDevices;
-      
-      cout << "Available CUDA devices are" << endl;
-      cudaGetDeviceCount(&nDevices);
-   
-      for (int i = 0; i < nDevices; i++) {
-        cudaGetDeviceProperties(&prop, i);
-        printf("  %d: %s\n", i, prop.name);
-      }
-
-      if (nDevices == 1) {                                                                                                                            // TODO : This will not work on every machine.
-         cudaSetDevice(0);
-         cout << "\nDevice " << 0 << " is selected.\n";
-	  } else {
-	     cudaSetDevice(nDevices - 1);
-	     //cudaSetDevice(0);
-	     cout << "\nDevice " << nDevices - 1 << " is selected.\n";
-      }
-      
-      cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
-      cout << "  Total GPU memory = " << totalGPUmemory << endl;
-      cout << "  Free GPU memory =  " << freeGPUmemory;
+      selectCUDAdevice();
    #endif
-
    
 
    // Set the thread number for MKL parallelization
    mkl_set_dynamic(0);
-   mkl_set_num_threads(16);
+   mkl_set_num_threads(N_MKL_THREADS);
 
 
    
-   double Start, Start1, wallClockTime;       // Used for run time measurement.
+   double Start, Start1, wallClockTime;   // Used for run time measurement.
 
    Start1 = getHighResolutionTime(1, 1.0);
 
@@ -448,7 +476,7 @@ int main()
    timeLoop();                            // Main solution loop.
    
    wallClockTime = getHighResolutionTime(2, Start1);
-   printf("\nTotal run            took  %8.3f seconds.\n", wallClockTime);
+   printf("\nTotal run took %10.3f seconds.\n", wallClockTime);
    
    cout << endl << "The program is terminated successfully.\n\n\n";
 
@@ -465,15 +493,15 @@ int main()
 
 
 //========================================================================
-void readInputFile()                                                                                                                                 // TODO: Define loop counters i and j inside the loops.
+void readInputFile()
 //========================================================================
 {
    // Read the input file with INP extension.
    
    string dummy, dummy2, dummy4, dummy5;
-   int dummy3, i, j;
+   int intDummy;
 
-   problemNameFile.open(string("ProblemName.txt").c_str(), ios::in);   // This is file called ProblemName.txt . It includes the name of the input file.
+   problemNameFile.open(string("ProblemName.txt").c_str(), ios::in);   // This ProblemName.txt file includes the name of the input file.
    problemNameFile >> whichProblem;   // This is used to construct input file's name.
    problemNameFile.close();
    
@@ -507,24 +535,24 @@ void readInputFile()                                                            
                                    // Later we'll add non-corner nodes to it. At this point we do NOT
                                    // know the total number of nodes. Therefore we use a large enough
                                    // number of NE*NENv. Later the size will be reduced to NN.
-   for (i=0; i<NE*NENv; i++) {
+   for (int i=0; i<NE*NENv; i++) {
       coord[i] = new double[3];
    }
 
    inpFile.ignore(256, '\n');   // Read and ignore the line
    inpFile.ignore(256, '\n');   // Read and ignore the line
 
-   for (i=0; i<NCN; i++){
-      inpFile >> dummy3 >> coord[i][0] >> coord[i][1] >> coord[i][2];
+   for (int i=0; i<NCN; i++){
+      inpFile >> intDummy >> coord[i][0] >> coord[i][1] >> coord[i][2];
       inpFile.ignore(256, '\n');
    }
    
 
-   if (eType == 1) {      // Hexahedral element
-     NEC = 8;      // Number of element corners
-     NEF = 6;      // Number of element faces
-     NEE = 12;     // Number of element edges
-   } else {               // Tetrahedral element
+   if (eType == 1) {  // Hexahedral element
+     NEC = 8;             // Number of element corners
+     NEF = 6;             // Number of element faces
+     NEE = 12;            // Number of element edges
+   } else {           // Tetrahedral element
      NEC = 4;
      NEF = 4;
      NEE = 6;
@@ -535,13 +563,13 @@ void readInputFile()                                                            
 
    // Read corner nodes of each element, i.e. LtoGnode
    LtoGnode = new int*[NE];
-   for (i=0; i<NE; i++) {
+   for (int i=0; i<NE; i++) {
       LtoGnode[i] = new int[NENv];
    }
 
 
-   for (i=0; i<NE; i++) {
-      for (j=0; j<NENv; j++) {
+   for (int i=0; i<NE; i++) {
+      for (int j=0; j<NENv; j++) {
          LtoGnode[i][j] = -1;     //Initialize to -1
       }
    }
@@ -551,8 +579,8 @@ void readInputFile()                                                            
    inpFile.ignore(256, '\n'); // Read and ignore the line 
 
    for (int e = 0; e < NE; e++){
-      inpFile >> dummy3;
-      for (i = 0; i < NEC; i++){
+      inpFile >> intDummy;
+      for (int i = 0; i < NEC; i++){
          inpFile >> LtoGnode[e][i];
          LtoGnode[e][i] = LtoGnode[e][i] - 1;                              // MATLAB -> C++ index switch 
       }
@@ -570,11 +598,11 @@ void readInputFile()                                                            
    BCtype = new double[nBC];
 
    BCstr = new double*[nBC];
-   for (i=0; i<nBC; i++) {
+   for (int i=0; i<nBC; i++) {
       BCstr[i] = new double[3];
    }
    
-   for (i = 0; i<nBC; i++){
+   for (int i = 0; i<nBC; i++){
       inpFile.ignore(256, ':');
       inpFile >> BCtype[i];
 
@@ -603,11 +631,11 @@ void readInputFile()                                                            
       
    if (BCnVelFaces != 0){
       BCvelFaces = new int*[BCnVelFaces];
-      for (i = 0; i < BCnVelFaces; i++){
+      for (int i = 0; i < BCnVelFaces; i++){
          BCvelFaces[i] = new int[3];
       }
       
-      for (i = 0; i < BCnVelFaces; i++){
+      for (int i = 0; i < BCnVelFaces; i++){
          inpFile >> BCvelFaces[i][0] >> BCvelFaces[i][1] >> BCvelFaces[i][2];
          BCvelFaces[i][0] = BCvelFaces[i][0] - 1;                              // MATLAB -> C++ index switch
          BCvelFaces[i][1] = BCvelFaces[i][1] - 1;                              // MATLAB -> C++ index switch
@@ -622,10 +650,10 @@ void readInputFile()                                                            
    
    if (BCnOutFaces != 0){
       BCoutFaces = new int*[BCnOutFaces];
-      for (i = 0; i < BCnOutFaces; i++){
+      for (int i = 0; i < BCnOutFaces; i++){
          BCoutFaces[i] = new int[3];
       }
-      for (i = 0; i < BCnOutFaces; i++){
+      for (int i = 0; i < BCnOutFaces; i++){
          inpFile >> BCoutFaces[i][0] >> BCoutFaces[i][1] >> BCoutFaces[i][2];
          BCoutFaces[i][0] = BCoutFaces[i][0] - 1;                              // MATLAB -> C++ index switch
          BCoutFaces[i][1] = BCoutFaces[i][1] - 1;                              // MATLAB -> C++ index switch
@@ -661,9 +689,6 @@ void readInputFile()                                                            
       NNp = NCN;      // Pressure are stored at element corners.
    }
 
-   // CONTROL
-   cout << endl << "                                                  NNp = " << NNp << endl;
-   
 } // End of function readInputFile()
 
 
@@ -1102,9 +1127,6 @@ void setupNonCornerNodes()
 
    // From now on use NN instead of nodeCount
    NN = nodeCount;
-
-   // CONTROL
-   cout << "                                                  NN = " << NN << endl;
 
    //for (int e=0; e<NE; e++) {
    //   for(int i=0; i<NENv; i++) {
@@ -1628,10 +1650,6 @@ void setupSparseM()
 
    sparseM_NNZ = 3 * sparseM_NNZ_onePart;   // Triple the number of nonzeros.
    
-   // CONTROL
-   cout << "                                                  sparseM_NNZ = " << sparseM_NNZ << endl;
-
-
    // Sparse storage of the K and A matrices are the same as M. Only extra
    // value arrays are necessary.
    sparseKvalue = new double[sparseM_NNZ/3];    // Only store the nonzeros of the upper-left sub matrix.
@@ -1645,6 +1663,13 @@ void setupSparseM()
    for (int i = 1; i <= NN; i++) {
       sparseMrowStarts[i] = sparseMrowStarts[i-1] + NNZcolInARow[i-1];
    }
+   
+   // MKL also needs the following modified version of sparseMrowStarts
+   sparseMrowStartsMod = new int[NN];
+   for (int i = 0; i < NN; i++) {
+      sparseMrowStartsMod[i] = sparseMrowStarts[i+1];
+   };
+
 
    // CONTROL
    //cout << sparseMrowStarts[NN+1]  << "   "  << sparseM_NNZ/3 << endl;
@@ -1859,19 +1884,20 @@ void setupSparseG()
 
    sparseG_NNZ = 3 * sparseG_NNZ_onePart;   // Triple the number of nonzeros.
    
-   // CONTROL
-   cout << "                                                  sparseG_NNZ = " << sparseG_NNZ << endl;
-
-
 
 
    // For CSR storage necessary for MKL and CUSP, we need row starts array too.                                                                      // TODO: This is repeated below.
    sparseGrowStarts = new int[NN+1];
    sparseGrowStarts[0] = 0;
-   //sparseGrowStarts[NN] = sparseG_NNZ;
    for (int i = 1; i <= NN; i++) {
       sparseGrowStarts[i] = sparseGrowStarts[i-1] + NNZcolInARow[i-1];
    }
+
+   // MKL also needs the following modified version of sparseGrowStarts
+   sparseGrowStartsMod = new int[NN];
+   for (int i = 0; i < NN; i++) {
+      sparseGrowStartsMod[i] = sparseGrowStarts[i+1];
+   };
 
    // CONTROL
    //cout << sparseGrowStarts[NN+1]  << "   "  << sparseG_NNZ/3 << endl;
@@ -2545,135 +2571,14 @@ void initializeAndAllocate()
    }
    
    
-
    createTecplot();
-
+   
+   
    // Initialize discrete time level and time.
    timeN = 0;
    timeT = t_ini;
 
 }  // End of function initializeAndAllocate()
-
-
-
-
-
-//========================================================================
-void initializeAndAllocateGPU()
-//========================================================================
-{
-#ifdef USECUDA
-
-   // Do the necessary memory allocations for the GPU. Apply the initial
-   // condition or read the restart file.
-
-   handle = 0;
-   descr  = 0;
-   
-   // Initialize cusparse library
-   cusparseCreate(&handle);
-   cublasCreate(&handleCUBLAS);
-
-   // Create and setup matrix descriptor
-   cusparseCreateMatDescr(&descr);
-
-   cusparseSetMatType(descr,CUSPARSE_MATRIX_TYPE_GENERAL);
-   cusparseSetMatIndexBase(descr,CUSPARSE_INDEX_BASE_ZERO);
-
-
-
-   int NNZM = sparseM_NNZ / 3;
-   int NNZG = sparseG_NNZ / 3;
-
-   cudaStatus = cudaMalloc((void**)&K_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error01: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&A_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error02: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&G1_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error03: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&G2_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error04: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&G3_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error05: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&UnpHalf_prev_d,   3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error06: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&KtimesAcc_prev_d, 3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error07: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Acc_d,            3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error08: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Acc_prev_d,       3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error09: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Pn_d,             NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error10: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Pnp1_d,           NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error11: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Pnp1_prev_d,      NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error12: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Pdot_d,           NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error13: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   
-   cudaStatus = cudaMalloc((void**)&Mrow_d,           NNZM   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error14: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Mcol_d,           NNZM   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error15: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&MrowStarts_d,     (NN+1) * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error16: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Grow_d,           NNZG   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error17: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Gcol_d,           NNZG   * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error18: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&GrowStarts_d,     (NN+1) * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error19: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-
-   cudaStatus = cudaMalloc((void**)&BCvelNodes_d,     BCnVelNodes * sizeof(int)); if(cudaStatus != cudaSuccess) { printf("Error20: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-
-   cudaStatus = cudaMalloc((void**)&MdOrigInv_d,      3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error21: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&MdInv_d,          3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error22: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Un_d,             3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error23: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Unp1_d,           3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error24: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&Unp1_prev_d,      3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error25: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&UnpHalf_d,        3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error26: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&R1_d,             3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error27: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&R2_d,             NNp    * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error28: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&R3_d,             3*NN   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error29: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-
-   cudaStatus = cudaMemcpy(MrowStarts_d, sparseMrowStarts, (NN+1) * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error30: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(K_d,          sparseKvalue,     NNZM   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error31: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(Mrow_d,       sparseMrow,       NNZM   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error32: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(Mcol_d,       sparseMcol,       NNZM   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error33: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(G1_d,         sparseG1value,    NNZG   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error34: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(G2_d,         sparseG2value,    NNZG   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error35: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(G3_d,         sparseG3value,    NNZG   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error36: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   
-   cudaStatus = cudaMemcpy(Grow_d,       sparseGrow,       NNZG   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error37: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(Gcol_d,       sparseGcol,       NNZG   * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error38: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(GrowStarts_d, sparseGrowStarts, (NN+1) * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error39: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-
-   cudaStatus = cudaMemcpy(MdInv_d,       MdInv,           3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error40: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(MdOrigInv_d,   MdOrigInv,       3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error41: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      
-
-   // Extract the 1st column of BCvelNodes and send it to the device.
-   int *dummy;
-   dummy = new int[BCnVelNodes];
-   for(int i = 0; i < BCnVelNodes; i++) {
-      dummy[i] = BCvelNodes[i][0];
-   }
-   cudaStatus = cudaMemcpy(BCvelNodes_d, dummy,  BCnVelNodes * sizeof(int), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error42: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   delete[] dummy;
-
-   
-   // Read the restart file if isRestart is equal to 1. If not, apply the
-   // specified BCs.                                                                                                                                 // TODO: Below initialization is already done.
-   //if (isRestart == 1) {
-   //  readRestartFile();
-   //} else {
-   //  applyBC_initial();
-   //}
-
-   // Send Un to the GPU
-   cudaStatus = cudaMemcpy(Un_d, Un, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(Pn_d, Pn, NNp  * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-
-   createTecplot();
-
-   // Initialize discrete time level and time.
-   timeN = 0;
-   timeT = t_ini;
-
-   // Dummy variables for GPU-CPU memory exchange
-   //dummy3NN = new double[3*NN];
-   //dummyNNp = new double[NNp];
-   
-
-   cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
-   cout << endl;
-   cout << "After initializeAndAllocateGPU() function" << endl;
-   cout << "   Free GPU memory =  " << freeGPUmemory << endl;
-
-#endif //USECUDA
-}  // End of function initializeAndAllocateGPU()
 
 
 
@@ -2702,21 +2607,29 @@ void timeLoop()
 
    #ifdef USECUDA
       initializeAndAllocateGPU();
-      //choleskyAnalysisGPU();   // For some unknown reason calling the analysis step here only once is slower than calling it again and again before the solve step.
    #endif
 
-   printf("\n\nMonitoring node is %d, with coordinates [%f, %f, %f].\n\n\n",
+   cout << endl;
+   cout << " NN = " << NN << endl;
+   cout << " NNp = " << NNp << endl;
+   cout << " sparseM_NNZ = " << sparseM_NNZ << endl;
+   cout << " sparseG_NNZ = " << sparseG_NNZ << endl;
+   #ifndef USECUDA
+      cout << " NNZ of upper part of Z = " << Z_NNZupper << endl;
+   #endif
+   
+   printf("\n\nMonitoring node is %d, with coordinates [%f, %f, %f]\n\n\n",
            monPoint, coord[monPoint][0], coord[monPoint][1], coord[monPoint][2]);
 
    printf("Time step  Iter     Time       u_monitor     v_monitor     w_monitor     p_monitor\n");
-   printf("-------------------------------------------------------------------------------------\n");
+   printf("-----------------------------------------------------------------------------------\n");
 
 
    while (timeT < t_final) {  // Time loop
       timeN = timeN + 1;
       timeT = timeT + dt;
      
-      // Initialize variables for the first iteration of the following loop.
+      // Initialize variables for the first iteration.
       #ifdef USECUDA
          cudaStatus = cudaMemcpy(UnpHalf_prev_d, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error45: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
          cudaStatus = cudaMemcpy(Pnp1_prev_d,    Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error46: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -2739,11 +2652,10 @@ void timeLoop()
       for (iter = 1; iter <= maxIter; iter++) {
 
          // Calculate intermediate velocity.
-         Start = getHighResolutionTime(1, 1.0);
-         
+         //Start = getHighResolutionTime(1, 1.0);
          step1(iter);
-         wallClockTime = getHighResolutionTime(2, Start);
-         printf("step1()                took  %8.3f seconds.\n", wallClockTime);
+         //wallClockTime = getHighResolutionTime(2, Start);
+         //if (PRINT_TIMES) printf("step1() took %6.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
@@ -2755,7 +2667,7 @@ void timeLoop()
             step2(iter);
          #endif
          wallClockTime = getHighResolutionTime(2, Start);
-         printf("step2()                took  %8.3f seconds.\n", wallClockTime);
+         if (PRINT_TIMES) printf("step2() took %6.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
@@ -2767,7 +2679,7 @@ void timeLoop()
             step3(iter);
          #endif
          wallClockTime = getHighResolutionTime(2, Start);
-         printf("step3()                took  %8.3f seconds.\n", wallClockTime);
+         if (PRINT_TIMES) printf("step3() took %6.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
 
@@ -2830,8 +2742,6 @@ void timeLoop()
             char transa, matdescra[6];
             double alpha, beta;
             int m = NN;
-            int *pointerE;
-            pointerE = new int[m];
 
             matdescra[0] = 'g';
             matdescra[1] = 'u';
@@ -2842,10 +2752,6 @@ void timeLoop()
             beta = 0.0;
             transa = 'n';
 
-            for (int i = 0; i < NN; i++) {
-               pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-            };
-
             double *KtimesAcc_prevSmall;
             double *Acc_prevSmall;
             KtimesAcc_prevSmall = new double[NN];
@@ -2854,7 +2760,7 @@ void timeLoop()
             for (int i = 0; i < NN; i++) {
                Acc_prevSmall[i] = Acc_prev[i];
             }
-            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 1st part of [K] * {Acc_prev}
+            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 1st part of [K] * {Acc_prev}
             for (int i = 0; i < NN; i++) {
                KtimesAcc_prev[i] = KtimesAcc_prevSmall[i];
             }
@@ -2862,7 +2768,7 @@ void timeLoop()
             for (int i = 0; i < NN; i++) {
                Acc_prevSmall[i] = Acc_prev[i + NN];
             }
-            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 2nd part of [K] * {Acc_prev}
+            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 2nd part of [K] * {Acc_prev}
             for (int i = 0; i < NN; i++) {
                KtimesAcc_prev[i + NN] = KtimesAcc_prevSmall[i];
             }
@@ -2870,7 +2776,7 @@ void timeLoop()
             for (int i = 0; i < NN; i++) {
                Acc_prevSmall[i] = Acc_prev[i + 2*NN];
             }
-            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 3rd part of [K] * {Acc_prev}
+            mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, Acc_prevSmall, &beta, KtimesAcc_prevSmall);   // 3rd part of [K] * {Acc_prev}
             for (int i = 0; i < NN; i++) {
                KtimesAcc_prev[i + 2*NN] = KtimesAcc_prevSmall[i];
             }
@@ -2880,7 +2786,6 @@ void timeLoop()
             //   printf("%d   %g\n", i, KtimesAcc_prev[i]);
             //}
 
-            delete[] pointerE;
             delete[] KtimesAcc_prevSmall;
             delete[] Acc_prevSmall;
          
@@ -2916,7 +2821,7 @@ void timeLoop()
       #ifdef USECUDA
          printMonitorDataGPU(iter);
       #else
-         printf("\n%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n",
+         printf("%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n",
                 timeN, iter, timeT, Un[monPoint],
                 Un[NN+monPoint], Un[2*NN+monPoint], Pn[monPoint]);
       #endif
@@ -3103,14 +3008,16 @@ void step0()
    //}
    
    #ifdef USECUDA
-      calculateZ_CUSP();
+      calculateZ_CUSP();   // Calculate Z using the CUSP library
+   #else
+      calculateZ();        // Calculate Z using the CSparse library
+      extractUpperTriangularPartOfZ();
    #endif
    
    #ifdef USECUDA
       cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
       cout << endl;
-      cout << "At the end of step2() function" << endl;
-      cout << "   Free GPU memory =  " << freeGPUmemory << endl;
+      cout << "At the end of step0() function, free GPU memory = " << freeGPUmemory << endl << endl;
    #endif
 
 }  // End of function step0()
@@ -3120,99 +3027,302 @@ void step0()
 
 
 //========================================================================
-void writeZcholToFile()
+void calculateZ()
 //========================================================================
 {
-   // Write necessary parts of Z_chol and Z_sym to a file so that thet can
-   // be read for future runs. This is done because Zchol calculation takes
-   // too long.
+   // Use Timothy Davis' CSparse package to calculate the Z matrix.
 
-   ZcholFile = fopen((whichProblem + ".zchol").c_str(), "wb");
-
-   fwrite(&Z_chol->L->nzmax, sizeof(int),    size_t(1),                ZcholFile);
-   fwrite(Z_chol->L->p,      sizeof(int),    size_t(NNp+1),            ZcholFile);
-   fwrite(Z_chol->L->i,      sizeof(int),    size_t(Z_chol->L->nzmax), ZcholFile);
-   fwrite(Z_chol->L->x,      sizeof(double), size_t(Z_chol->L->nzmax), ZcholFile);
-   fwrite(Z_sym->pinv,       sizeof(int),    size_t(NNp),              ZcholFile);
+   // Create colStarts array for the G matrix.
+   /*
+   int *sparseGcolStarts;
+   sparseGcolStarts = new int[NNp+1];
+   for (int i = 0; i < NNp+1; i++) {
+      sparseGcolStarts[i] = 0;
+   }
+   
+   for (int i = 0; i < sparseG_NNZ; i++) {   // Find the number of nonzeros entries in each column, but store values for the next column, i.e. number of nozeros of column c is stored to entry c+1.
+      sparseGcolStarts[sparseGcol[i] + 1] += 1;
+   }
+   
+   for (int i = 1; i < NNp+1; i++) {         // Add the nonzero entries in each column properly to determine colStarts
+      sparseGcolStarts[i] = sparseGcolStarts[i] + sparseGcolStarts[i - 1];
+   }
 
    // CONTROL
-   //for(int i=0; i<NNp; i++) {
-   //   cout << Z_sym->pinv[i] << endl;
-   //}
+   //cout << endl << "NNp+1 entry of sparseGcolStarts = " << sparseGcolStarts[NNp] << endl;
+   */
+
+   waitForUser("OK1. Enter a character... ");
+
+   G1_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 1, 1);   // See page 12 of Tim Davis' book.                                                            // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
+   G1_cs->i = sparseGrow;                                                                                                                            //        To directly allocate this in CSC format we need column wise ordering info.
+   G1_cs->p = sparseGcol;
+   G1_cs->x = sparseG1value;
+   G1_cs->nz = sparseG_NNZ/3;
+
+   G3_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 1, 1);
+   G3_cs->i = sparseGrow;
+   G3_cs->p = sparseGcol;
+   G3_cs->x = sparseG3value;
+   G3_cs->nz = sparseG_NNZ/3;
+
+   G2_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 1, 1);
+   G2_cs->i = sparseGrow;
+   G2_cs->p = sparseGcol;
+   G2_cs->x = sparseG2value;
+   G2_cs->nz = sparseG_NNZ/3;
+
+   waitForUser("OK2. Enter a character... ");
+
+   G1_cs_CSC = cs_compress(G1_cs);             // Convert G1 from triplet format into compressed column format.
+   G2_cs_CSC = cs_compress(G2_cs);
+   G3_cs_CSC = cs_compress(G3_cs);
+
+   waitForUser("OK3. Enter a character... ");
+
+   G1t_cs_CSC = cs_transpose(G1_cs_CSC, 1);    // Determine the transpose of G1 in compressed column format.
+   G2t_cs_CSC = cs_transpose(G2_cs_CSC, 1);
+   G3t_cs_CSC = cs_transpose(G3_cs_CSC, 1);
+
+   //  CONTROL
+   //cs_print(G1_cs_CSC, 0);
+   //cs_print(G1t_cs_CSC, 0);
+
+   waitForUser("OK5. Enter a character... ");
+
+   // Use CSparse library to calculate [Z] = transpose(G) * inv(Md) * G
+
+   // First calculate dummy = inv(Md) * G1. It will have the same sparsity pattern with G, only the values will change.
+   double *dummyValues;
+   dummyValues = new double[sparseG_NNZ/3];
    
-   fclose(ZcholFile);
-
-                                                                                                                                                     // TODO : Call a function here to deallocate all the allocated memory.
-   char dummyUserInput;
-   cout << "\n\n\n\n   Zchol and Zsym are written to a file.\n\n"
-        << "   Press Ctrl-C to stop this run and restart.\n\n"
-        << "   Press Ctrl-C.\n\n"
-        << "   Press Ctrl-C.\n\n";
-   cin >> dummyUserInput;
-
-}  // End of function writeZcholToFile()
 
 
+   for (int i = 0; i < sparseG_NNZ/3; i++) {
+      dummyValues[i] = sparseG1value[i] * MdOrigInv[sparseGrow[i]];
+   }
+   // Allocate the dummy matrix in CSparse triplet format
+   cs *dummy_cs;
+   dummy_cs = cs_spalloc(NN, NNp, sparseG_NNZ/3, 0, 1);                                                                                               // TODO : 4. parametre olarak 0 veya 1 vermek birseyi degistirmiyor.
+   dummy_cs->i = sparseGrow;
+   dummy_cs->p = sparseGcol;
+   dummy_cs->x = dummyValues;
+   dummy_cs->nz = sparseG_NNZ/3;
+
+   // Convert dummy matrix from triplet format to CSC format
+   cs *dummy_cs_CSC;
+   dummy_cs_CSC = cs_compress(dummy_cs);
+
+   // Multiply transpose(G1) with the dummy matrix to get the 1st contribution to [Z].
+   Z_cs = cs_multiply(G1t_cs_CSC, dummy_cs_CSC);
 
 
 
-//========================================================================
-void readZcholFromFile()
-//========================================================================
-{
-   // Read Z_chol and Z_sym from a file.
-   // This is done because Zchol calculation takes too long.
+   for (int i = 0; i < sparseG_NNZ/3; i++) {
+      dummyValues[i] = sparseG2value[i] * MdOrigInv[sparseGrow[i]];
+   }
+   // Allocate the dummy matrix in CSparse triplet format
+   dummy_cs->x = dummyValues;
 
-   size_t dummy;   // Used to prevent warnings about fread function not returning a value.
+   // Convert dummy matrix from triplet format to CSC format
+   dummy_cs_CSC = cs_compress(dummy_cs);
+
+   // Multiply transpose(G2) with the dummy matrix to get the second contribution to [Z].
+   cs *dummyZ_cs;
+   dummyZ_cs = cs_multiply(G2t_cs_CSC, dummy_cs_CSC);
+
+   // Add this dummyZ to the previously calculated Z
+   for(int i=0; i<Z_cs->nzmax; i++) {
+      Z_cs->x[i] = Z_cs->x[i] + dummyZ_cs->x[i];
+   }
+
+   cs_spfree(dummyZ_cs);
+
    
-   ZcholFile = fopen((whichProblem + ".zchol").c_str(), "rb");
    
-   dummy = fread(&Z_chol_L_NZMAX, sizeof(int), size_t(1), ZcholFile);
+   for (int i = 0; i < sparseG_NNZ/3; i++) {
+      dummyValues[i] = sparseG3value[i] * MdOrigInv[sparseGrow[i]];
+   }
+   // Allocate the dummy matrix in CSparse triplet format
+   dummy_cs->x = dummyValues;
 
-   Z_chol_L = cs_spalloc(NNp, NNp, Z_chol_L_NZMAX, 1, 0);
+   // Convert dummy matrix from triplet format to CSC format
+   dummy_cs_CSC = cs_compress(dummy_cs);
 
-   Z_chol_Lp  = new int[NNp+1];
-   Z_chol_Li  = new int[Z_chol_L_NZMAX];
-   Z_chol_Lx  = new double[Z_chol_L_NZMAX];
-   Z_sym_pinv = new int[NNp];
+   // Multiply transpose(G3) with the dummy matrix to get the third contribution to [Z].
+   dummyZ_cs = cs_multiply(G3t_cs_CSC, dummy_cs_CSC);
 
-   Z_chol_Li = Z_chol_L->i;
-   Z_chol_Lp = Z_chol_L->p;
-   Z_chol_Lx = Z_chol_L->x;
+   // Add this dummyZ to the previously calculated Z
+   for(int i=0; i<Z_cs->nzmax; i++) {
+      Z_cs->x[i] = Z_cs->x[i] + dummyZ_cs->x[i];
+   }
+   cs_spfree(dummyZ_cs);
+
+   waitForUser("OK6. Enter a character... ");
    
-   dummy = fread(Z_chol_Lp,  sizeof(int),    size_t(NNp+1),          ZcholFile);
-   dummy = fread(Z_chol_Li,  sizeof(int),    size_t(Z_chol_L_NZMAX), ZcholFile);
-   dummy = fread(Z_chol_Lx,  sizeof(double), size_t(Z_chol_L_NZMAX), ZcholFile);
-   dummy = fread(Z_sym_pinv, sizeof(int),    size_t(NNp),            ZcholFile);
+   //cs_spfree(dummy_cs);    // If we delete this sparseGcol is also deleted, but we need it later.                                                   // TODO
+   delete[] dummyValues;
 
-   // CONTROL
-   //for(int i=0; i<NNp; i++) {
-   //   cout << Z_sym_pinv[i] << endl;
-   //}
+   delete[] sparseGrow;
+   
+   cs_spfree(dummy_cs_CSC);
 
-   fclose(ZcholFile);
+   //cs_print(Z_cs, 0);
 
+   // Apply pressure BCs to [Z]
+   applyBC_Step2(1);
 
-   // Copy variables to the GPU
-   #ifdef USECUDA
-      cudaStatus = cudaMalloc((void**)&Z_chol_Lp_d,  (NNp + 1)      * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMalloc((void**)&Z_chol_Li_d,  Z_chol_L_NZMAX * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error56: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMalloc((void**)&Z_chol_Lx_d,  Z_chol_L_NZMAX * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error57: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMalloc((void**)&Z_sym_pinv_d, NNp            * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error58: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-
-      cudaStatus = cudaMemcpy(Z_chol_Lp_d,  Z_chol_Lp,  (NNp + 1)      * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error59: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMemcpy(Z_chol_Li_d,  Z_chol_Li,  Z_chol_L_NZMAX * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error60: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMemcpy(Z_chol_Lx_d,  Z_chol_Lx,  Z_chol_L_NZMAX * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error61: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      cudaStatus = cudaMemcpy(Z_sym_pinv_d, Z_sym_pinv, NNp            * sizeof(int),    cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error62: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   waitForUser("OK7. Enter a character... ");
+   
+   // To use with MKL CG solver, compute the transpose of Z_cs and write it to a file.
+   // Since Z is a symmetric matrix taking its tranpose will not change it but will
+   // only sort its column indices.
+   Z_csSorted = cs_transpose(Z_cs, 1);
       
-      cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
-      cout << endl;
-      cout << "After readZcholFromFile() function" << endl;
-      cout << "   Free GPU memory =  " << freeGPUmemory << endl;
+   // Deallocate memory
+   delete[] Md;
+   //delete[] MdOrigInv;
+   cs_spfree(Z_cs);
+                                                                                                                                                      // TODO : Free unncesary memory. Be careful abour CSparse varibles.
+}  // End of function calculateZ()
 
-   #endif
 
-}  // End of function readZcholFromFile()
+
+
+
+//========================================================================
+void extractUpperTriangularPartOfZ()
+//========================================================================
+{
+   // MKL CG solver needs only the upper triangle of the symmetric matrices.
+   // So let's find it for [Z]. Also it uses 1-based indexing.
+
+   Z_NNZupper = NNp + (Z_csSorted->nzmax - NNp) / 2;
+   
+   Z_rowStartsUpper  = new int[NNp+1];
+   Z_colIndicesUpper = new int[Z_NNZupper];
+   Z_valuesUpper     = new double[Z_NNZupper];
+
+   Z_rowStartsUpper[0] = 1;
+
+   int counter = 0;  // Counter for the nonzeros on the upper half
+
+   for(int r = 0; r < NNp; r++) {  // Row loop
+      for(int c = Z_csSorted->p[r]; c < Z_csSorted->p[r+1]; c++) {  // Nonzero column loop
+         if(Z_csSorted->i[c] >= r) {  // These are on the upper half
+            Z_colIndicesUpper[counter] = Z_csSorted->i[c] + 1;
+            Z_valuesUpper[counter] = Z_csSorted->x[c];
+            counter++;
+         }
+      }
+      Z_rowStartsUpper[r+1] = counter + 1;
+   }
+                                                                                                                                                      // TODO : Free unncesary memory. Be careful abour CSparse varibles.
+} // End of function extractUpperTriangularPartOfZ()
+
+
+
+
+
+//========================================================================
+void calculateMatrixA()
+//========================================================================
+{
+   // Calculate Ae and assemble into A. This is called only for the first
+   // iteration of each time step.
+
+   int nnzM = sparseM_NNZ / 3;
+   int nnzM2 = 2 * nnzM;
+   
+   double *u0_nodal, *v0_nodal, *w0_nodal;
+   double u0, v0, w0;
+   
+   u0_nodal = new double[NENv];
+   v0_nodal = new double[NENv];
+   w0_nodal = new double[NENv];
+   
+   double **Ae_11;
+   double GQfactor;
+
+   for (int i = 0; i < sparseM_NNZ/3; i++){
+      sparseAvalue[i] = 0.0;
+   }
+
+   Ae_11 = new double*[NENv];
+   for (int i = 0; i < NENv; i++) {
+      Ae_11[i] = new double[NENv];
+   }
+
+   // Calculate Ae and assemble it into A
+   for (int e = 0; e < NE; e++) {
+
+      for (int i = 0; i < NENv; i++) {
+         for (int j = 0; j < NENv; j++) {
+            Ae_11[i][j] = 0.0;
+         }
+      }
+         
+      // Extract elemental u, v and w velocity values from the global solution
+      // solution array of the previous iteration.
+      int iG;
+      for (int i = 0; i<NENv; i++) {
+         iG = LtoGvel[e][i];
+         u0_nodal[i] = Un[iG];
+  
+         iG = LtoGvel[e][i + NENv];
+         v0_nodal[i] = Un[iG];
+      
+         iG = LtoGvel[e][i + 2*NENv];
+         w0_nodal[i] = Un[iG];
+      }
+
+      for (int k = 0; k < NGP; k++) {   // Gauss Quadrature loop
+         GQfactor = detJacob[e][k] * GQweight[k];
+
+         // Above calculated u0 and v0 values are at the nodes. However in GQ
+         // integration we need them at GQ points. Let's calculate them using
+         // interpolation based on shape functions.
+         u0 = 0.0;
+         v0 = 0.0;
+         w0 = 0.0;
+         for (int i = 0; i<NENv; i++) {
+            u0 = u0 + Sv[k][i] * u0_nodal[i];
+            v0 = v0 + Sv[k][i] * v0_nodal[i];
+            w0 = w0 + Sv[k][i] * w0_nodal[i];
+         }
+       
+         for (int i = 0; i < NENv; i++) {
+            for (int j = 0; j < NENv; j++) {
+               Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][k][j][0] + v0 * gDSv[e][k][j][1] + w0 * gDSv[e][k][j][2]) * Sv[k][i] * GQfactor;
+            }
+         }       
+      } // GQ loop
+     
+     
+      // Assemble Ae into sparse A.
+      for (int i = 0; i < NENv; i++) {
+         for (int j = 0; j < NENv; j++) {
+            sparseAvalue[sparseMapM[e][i][j]] += Ae_11[i][j];   // Assemble upper left sub-matrix of A
+         }
+      }
+   }  // End of element loop
+
+
+   for (int i = 0; i < NENv; i++) {
+      delete[] Ae_11[i];
+   }
+   delete[] Ae_11;
+
+   delete[] u0_nodal;
+   delete[] v0_nodal;
+   delete[] w0_nodal;
+
+   //  CONTROL
+   //for (int i = 0; i < sparseM_NNZ/3; i++){
+   //   cout << i+1 << "  " << sparseMrow[i]+1 << "  " << sparseMcol[i]+1 << "  " << sparseAvalue[i] << endl;
+   //}
+
+} // End of function calculateMatrixA()
 
 
 
@@ -3223,111 +3333,20 @@ void step1(int iter)
 //========================================================================
 {
    // Executes step 1 of the method to determine the intermediate velocity.
-
-   #ifdef USECUDA
-      cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error63: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   #endif
+   
+   double Start, wallClockTime;
 
    // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
    if (iter == 1) {
-
-      int nnzM = sparseM_NNZ / 3;
-      int nnzM2 = 2 * nnzM;
-
-      double *u0_nodal, *v0_nodal, *w0_nodal;
-      double u0, v0, w0;
-   
-      u0_nodal = new double[NENv];
-      v0_nodal = new double[NENv];
-      w0_nodal = new double[NENv];
-
-      double **Ae_11;
-      double GQfactor;
-
-      for (int i = 0; i < sparseM_NNZ/3; i++){
-         sparseAvalue[i] = 0.0;
-      }
-
-      Ae_11 = new double*[NENv];
-      for (int i = 0; i < NENv; i++) {
-         Ae_11[i] = new double[NENv];
-      }
-
-      // Calculate Ae and assemble it into A
-      for (int e = 0; e < NE; e++) {
-
-         for (int i = 0; i < NENv; i++) {
-            for (int j = 0; j < NENv; j++) {
-               Ae_11[i][j] = 0.0;
-            }
-         }
-         
-         // Extract elemental u, v and w velocity values from the global solution
-         // solution array of the previous iteration.
-         int iG;
-         for (int i = 0; i<NENv; i++) {
-            iG = LtoGvel[e][i];
-            u0_nodal[i] = Un[iG];
-  
-            iG = LtoGvel[e][i + NENv];
-            v0_nodal[i] = Un[iG];
-      
-            iG = LtoGvel[e][i + 2*NENv];
-            w0_nodal[i] = Un[iG];
-         }
-
-         for (int k = 0; k < NGP; k++) {   // Gauss Quadrature loop
-            GQfactor = detJacob[e][k] * GQweight[k];
-
-            // Above calculated u0 and v0 values are at the nodes. However in GQ
-            // integration we need them at GQ points. Let's calculate them using
-            // interpolation based on shape functions.
-            u0 = 0.0;
-            v0 = 0.0;
-            w0 = 0.0;
-            for (int i = 0; i<NENv; i++) {
-               u0 = u0 + Sv[k][i] * u0_nodal[i];
-               v0 = v0 + Sv[k][i] * v0_nodal[i];
-               w0 = w0 + Sv[k][i] * w0_nodal[i];
-            }
-       
-            for (int i = 0; i < NENv; i++) {
-               for (int j = 0; j < NENv; j++) {
-                  Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][k][j][0] + v0 * gDSv[e][k][j][1] + w0 * gDSv[e][k][j][2]) * Sv[k][i] * GQfactor;
-               }
-            }       
-         } // GQ loop
-     
-     
-         // Assemble Ae into sparse A.
-         for (int i = 0; i < NENv; i++) {
-            for (int j = 0; j < NENv; j++) {
-               sparseAvalue[sparseMapM[e][i][j]] += Ae_11[i][j];   // Assemble upper left sub-matrix of A
-            }
-         }
-      }  // End of element loop
-
-
-      for (int i = 0; i < NENv; i++) {
-         delete[] Ae_11[i];
-      }
-      delete[] Ae_11;
-
-      delete[] u0_nodal;
-      delete[] v0_nodal;
-      delete[] w0_nodal;
-
-      //  CONTROL
-      //for (int i = 0; i < sparseM_NNZ/3; i++){
-      //   cout << i+1 << "  " << sparseMrow[i]+1 << "  " << sparseMcol[i]+1 << "  " << sparseAvalue[i] << endl;
-      //}
-
-   }  // End of iter==1 check
+      calculateMatrixA();
+   }
 
 
    // Calculate the RHS vector of step 1.
    // R1 = - K * UnpHalf_prev - A * UnpHalf_prev - G * Pn;
 
+   Start = getHighResolutionTime(1, 1.0);
+   
    #ifdef USECUDA
       step1GPUpart();
    #else
@@ -3336,10 +3355,6 @@ void step1(int iter)
       double beta;
       int m = NN;
       int k = NNp;
-      int *pointerE;
-      int *pointerE2;
-      pointerE = new int[m];
-      pointerE2 = new int[m];
 
       transa = 'n';
    
@@ -3348,17 +3363,12 @@ void step1(int iter)
       matdescra[2] = 'n';
       matdescra[3] = 'c';
    
-      for (int i = 0; i < m; i++) {
-         pointerE[i] = sparseMrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-      };
-      for (int i = 0; i < m; i++) {
-         pointerE2[i] = sparseGrowStarts[i+1];  // A new form of rowStarts data required by mkl_dcsrmv
-      };
-
       double *UnpHalf_prev1, *UnpHalf_prev2, *UnpHalf_prev3;
+      
       UnpHalf_prev1 = new double[NN];
       UnpHalf_prev2 = new double[NN];
       UnpHalf_prev3 = new double[NN];
+      
       for (int i = 0; i < NN; i++) {
          UnpHalf_prev1[i] = UnpHalf_prev[i];
          UnpHalf_prev2[i] = UnpHalf_prev[i + NN];
@@ -3366,9 +3376,9 @@ void step1(int iter)
       }
 
       beta = 0.0;
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- K * UnpHalf_prev)  part of R1
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R2
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R3
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev1, &beta, R11);   // This contributes to (- K * UnpHalf_prev)  part of R1
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R2
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R3
 
       // CONTROL
       //for (int i = 0; i < NN; i++) {
@@ -3376,15 +3386,15 @@ void step1(int iter)
       //}
    
       beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev1, &beta, R11);   // This contributes to (- A * UnpHalf_prev)  part of R1
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R2   
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, pointerE, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R3
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev1, &beta, R11);   // This contributes to (- A * UnpHalf_prev)  part of R1
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R2   
+      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R3
 
 
       beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
-      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R11);            // This contributes to (- G * Pn)  part of R1
-      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R12);            // This contributes to (- G * Pn)  part of R2
-      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE2, Pn, &beta, R13);            // This contributes to (- G * Pn)  part of R3
+      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pn, &beta, R11);             // This contributes to (- G * Pn)  part of R1
+      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pn, &beta, R12);             // This contributes to (- G * Pn)  part of R2
+      mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pn, &beta, R13);             // This contributes to (- G * Pn)  part of R3
    
 
       for (int i = 0; i < NN; i++) {
@@ -3416,18 +3426,16 @@ void step1(int iter)
       //   cout << UnpHalf[i] << endl;
       //}
 
-   #endif  // USECUDA
-
-
-   #ifndef USECUDA
       delete[] UnpHalf_prev1;
       delete[] UnpHalf_prev2;
       delete[] UnpHalf_prev3;
+      
+   #endif  // USECUDA
    
-      delete[] pointerE;
-      delete[] pointerE2;
-   #endif
-
+   
+   wallClockTime = getHighResolutionTime(2, Start);
+   if (PRINT_TIMES) printf("step1() took %6.3f seconds.\n", wallClockTime);
+   
 }  // End of function step1()
 
 
@@ -3468,14 +3476,10 @@ void step2(int iter)
    //}
    
    
-
-
    char transa, matdescra[6];
    double alpha, beta;
    int m = NN;
    int k = NNp;
-   int *pointerE;
-   pointerE = new int[m];
 
    matdescra[0] = 'g';
    matdescra[1] = 'u';
@@ -3485,10 +3489,6 @@ void step2(int iter)
    alpha = 1.0;
    transa = 't';    // Multiply using Gt, not G
       
-   for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-   };
-
    double *dummy1, *dummy2, *dummy3;
    dummy1 = new double[NN];
    dummy2 = new double[NN];
@@ -3500,10 +3500,10 @@ void step2(int iter)
    }
 
    beta = 0.0;
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE, dummy1, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, dummy1, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
    beta = 1.0;   // Add the results of the following Matrix-vector multiplication to R2
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE, dummy2, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE, dummy3, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, dummy2, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, dummy3, &beta, R2);   // This contributes to (Gt * dummyR2) which is R2
 
    // CONTROL
    //for (int i=0; i<NNp; i++) {
@@ -3514,45 +3514,10 @@ void step2(int iter)
    // Apply BCs for step2. Modify R2 for pressure BCs.
    applyBC_Step2(2);
 
-
    
    // Solve for Pdot using MKL's CG solver.
    MKL_CG_solver(iter);
 
-
-/*
-   // Solve for Pdot using Cholesky factorization obtained in step 0.
-   // Reference: Timothy Davis' book, page 136
-   for (int i = 0; i < NNp; i++) {
-      Pdot[i] = R2[i];                    // Equate the solution vector to the RHS vector first.
-   }
-   double *x;
-   x = new double[NNp]; //cs_malloc(NNp, sizeof(double));    // Get workspace
-   cs_ipvec(Z_sym_pinv, R2, x, NNp);
-
-   // CONTROL
-   //for (int i=0; i<NNp; i++) {
-   //   cout << x[i] << endl;
-   //}
-
-   cs_lsolve(Z_chol_L, x);
-
-   // CONTROL
-   //for (int i=0; i<NNp; i++) {
-   //   cout << x[i] << endl;
-   //}
-
-   cs_ltsolve(Z_chol_L, x);
-
-   // CONTROL
-   //for (int i=0; i<NNp; i++) {
-   //   cout << x[i] << endl;
-   //}
- 
-   cs_pvec(Z_sym_pinv, x, Pdot, NNp);
-
-   cs_free(x);
-*/
 
    // CONTROL
    //for (int i=0; i<NNp; i++) {
@@ -3574,7 +3539,6 @@ void step2(int iter)
    delete[] dummy1;
    delete[] dummy2;
    delete[] dummy3;
-   delete[] pointerE;
 
 }  // End of function step2()
 
@@ -3596,8 +3560,6 @@ void step3(int iter)
    double beta = 0.0;
    int m = NN;
    int k = NNp;
-   int *pointerE; 
-   pointerE = new int[m];
 
    transa = 'n';
    
@@ -3606,13 +3568,9 @@ void step3(int iter)
    matdescra[2] = 'n';
    matdescra[3] = 'c';
    
-   for (int i = 0; i < m; i++) {
-      pointerE[i] = sparseGrowStarts[i+1];   // A new form of rowStarts data required by mkl_dcsrmv
-   };
-
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R31);            // This contributes to (- dt * G1 * Pdot)  part of R3
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R32);            // This contributes to (- dt * G2 * Pdot)  part of R3
-   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, pointerE, Pdot, &beta, R33);            // This contributes to (- dt * G3 * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pdot, &beta, R31);            // This contributes to (- dt * G1 * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG2value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pdot, &beta, R32);            // This contributes to (- dt * G2 * Pdot)  part of R3
+   mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG3value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pdot, &beta, R33);            // This contributes to (- dt * G3 * Pdot)  part of R3
 
    for (int i = 0; i < NN; i++) {
       R3[i]        = R31[i];
@@ -3651,8 +3609,6 @@ void step3(int iter)
    //   cout << Unp1[i] << endl;
    //}
 
-   delete[] pointerE;
-
 }  // End of function step3()
 
 
@@ -3665,92 +3621,6 @@ void MKL_CG_solver(int iter)
 {
    // Solve the system of step 2 [Z]{Pdot}={R2} using CG.
    // Reference: CG and PCG examples coming with Intel MKL.
-
-   // Try to open the Zchol file to check whether it exists or not.
-   // Do this only for the first iteration of the first time step.
-   if (timeN == 1 && iter == 1) {
-      Zfile = fopen((whichProblem + ".zCSR").c_str(), "rb");
-   
-      if (Zfile == NULL) {   // File does not exist
-         cout << "\n\n\n  .zCSR file does not exist. first run the code by defining USECUDA and create that file.\n\n\n.";
-         cout << "  Press Ctrl-C to quit.\n\n";
-         cout << "  Press Ctrl-C to quit.\n\n";
-         cout << "  Press Ctrl-C to quit.\n\n";
-      } else {
-         size_t dummy;   // Used to prevent warnings about fread function not returning a value.
-         int Z_NNZ;
-         int *Z_rowStarts, *Z_colIndices;
-         double *Z_values;
-
-         Zfile = fopen((whichProblem + ".zCSR").c_str(), "rb");
-   
-         dummy = fread(&Z_NNZ, sizeof(int), size_t(1), Zfile);
-         
-         Z_rowStarts  = new int[NNp + 1];
-         Z_colIndices = new int[Z_NNZ];
-         Z_values     = new double[Z_NNZ];
-
-         dummy = fread(Z_rowStarts,  sizeof(int),    size_t(NNp+1), Zfile);
-         dummy = fread(Z_colIndices, sizeof(int),    size_t(Z_NNZ), Zfile);
-         dummy = fread(Z_values,     sizeof(double), size_t(Z_NNZ), Zfile);
-
-         // CONTROL
-         //for(int i=0; i<NNp+1; i++) {
-         //   cout << Z_rowStarts[i] << endl;
-         //}
-         //for(int i=0; i<Z_NNZ; i++) {
-         //   cout << Z_colIndices[i] << endl;
-         //}
-         //for(int i=0; i<Z_NNZ; i++) {
-         //   cout << Z_values[i] << endl;
-         //}
-
-         fclose(Zfile);
-
-
-         // MKL solvers need only the upper triangle of the symmetric matrices.
-         // So let's find them.
-         // Also they use 1-based indexing.
-
-         Z_NNZupper = NNp + (Z_NNZ - NNp) / 2;
-         Z_rowStartsUpper  = new int[NNp+1];
-         Z_colIndicesUpper = new int[Z_NNZupper];
-         Z_valuesUpper     = new double[Z_NNZupper];
-
-         Z_rowStartsUpper[0] = 1;
-
-         int counter = 0;  // Counter for the nonzeros on the upper half
-
-         for(int r = 0; r < NNp; r++) {  // Row loop
-            for(int c = Z_rowStarts[r]; c < Z_rowStarts[r+1]; c++) {  // Nonzero column loop
-               if(Z_colIndices[c] >= r) {  // These are on the upper half
-                  Z_colIndicesUpper[counter] = Z_colIndices[c] + 1;
-                  Z_valuesUpper[counter] = Z_values[c];
-                  counter++;
-               }
-            }
-            Z_rowStartsUpper[r+1] = counter + 1;
-         }
-
-         // CONTROL
-         //for(int i=0; i<NNp+1; i++) {
-         //   cout << Z_rowStartsUpper[i] << endl;
-         //}
-         //for(int i=0; i<Z_NNZupper; i++) {
-         //   cout << Z_colIndicesUpper[i] << endl;
-         //}
-         //for(int i=0; i<Z_NNZupper; i++) {
-         //   cout << Z_valuesUpper[i] << endl;
-         //}
-
-         delete[] Z_rowStarts;
-         delete[] Z_colIndices;
-         delete[] Z_values;
-
-      }  // End of Zfile == NULL check
-
-   }  // End of timeN and iter check
-
 
    MKL_INT n, rci_request;
    n = NNp;
@@ -3773,7 +3643,7 @@ void MKL_CG_solver(int iter)
 
    dcg_init (&n, Pdot, R2, &rci_request, ipar, dpar, tmp);
    if (rci_request != 0) {
-      printf("This example FAILED as the solver has returned the ERROR code %d\n\n", rci_request);
+      printf("FAILURE in MKL CG solver. ERROR code %d\n\n", rci_request);
       MKL_Free_Buffers();
       return;
    }
@@ -3788,7 +3658,7 @@ void MKL_CG_solver(int iter)
 
    dcg_check (&n, Pdot, R2, &rci_request, ipar, dpar, tmp);
    if (rci_request != 0) {
-      printf("This example FAILED as the solver has returned the ERROR code %d\n\n", rci_request);
+      printf("FAILURE in MKL CG solver. ERROR code %d\n\n", rci_request);
       MKL_Free_Buffers();
       return;
    }
@@ -3796,7 +3666,7 @@ void MKL_CG_solver(int iter)
    rci:dcg (&n, Pdot, R2, &rci_request, ipar, dpar, tmp);
    if (rci_request == 0) {   // The solution is found with the required precision
       dcg_get (&n, Pdot, R2, &rci_request, ipar, dpar, tmp, &solverIter);
-      cout << "MKL_CG converged after " << solverIter << " iterations." << endl;
+      if (PRINT_TIMES) cout << "MKL_CG converged after " << solverIter << " iterations." << endl;
       MKL_Free_Buffers();
       goto out;
    } else if (rci_request == 1) { // Compute the vector A*tmp[0] and put the result in vector tmp[n]
@@ -3806,7 +3676,7 @@ void MKL_CG_solver(int iter)
       mkl_dcsrsv (&matdes[2], &n, &one, matdes, Z_valuesUpper, Z_colIndicesUpper, Z_rowStartsUpper, &Z_rowStartsUpper[1], &tmp[2*n], &tmp[3*n]);
       goto rci;
    } else {  // If rci_request=anything else, then dcg subroutine failed
-      printf("This example FAILED as the solver has returned the ERROR code %d\n\n", rci_request);
+      printf("FAILURE in MKL CG solver. ERROR code %d\n\n", rci_request);
       MKL_Free_Buffers();
       return;
    }
@@ -3850,7 +3720,7 @@ void applyBC_initial()
       Un[node + NN]   = BCstr[whichBC][1];
       Un[node + 2*NN] = BCstr[whichBC][2];
 
-      // Below is for the fully-developed inlet of the bending square duct problem      
+      // Below is for the fully-developed inlet of the bending square duct problem
       /*
       if (whichBC == 0) {
          counter++;
@@ -3931,7 +3801,7 @@ void applyBC_Step2(int flag)
    // In order not to break down the symmetry of [Z], we use the "LARGE number"
    // trick.
 
-   double LARGE = 1000;                                                                                                                              // TODO: Implement EBCs without the use of LARGE.
+   double LARGE = 1000;                                                                                                                               // TODO: Implement EBCs without the use of LARGE.
 
    int node = zeroPressureNode;     // Node at which pressure is set to zero.
 
