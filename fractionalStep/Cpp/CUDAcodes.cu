@@ -30,6 +30,10 @@
 int NBLOCKS = 128;
 int NTHREADS = 1024;
 
+#define NGP_SIZE (8)
+#define NENv_SIZE (27)
+#define DIM_SIZE (3)
+
 
 using namespace std;
 
@@ -74,6 +78,21 @@ extern bool PRINT_TIMES;
 extern double getHighResolutionTime(int, double);
 extern void createTecplot();
 
+
+extern int NE, NGP, NENv;
+extern int *NmeshColors, *meshColors, *elementsOfColor;
+extern int *LtoGvel_1d;
+extern int *sparseMapM_1d;
+extern double *Sv_1d;
+extern double *gDSv_1d, *GQfactor_1d;
+
+extern int *NmeshColors_d, *meshColors_d, *elementsOfColor_d;
+extern int *LtoGvel_1d_d;
+extern int *sparseMapM_1d_d;
+extern double *Sv_1d_d;
+extern double *gDSv_1d_d, *GQfactor_1d_d;
+
+// double *UnGPU;
 
 
 
@@ -184,7 +203,27 @@ void initializeAndAllocateGPU()
 
    cudaStatus = cudaMemcpy(MdInv_d,       MdInv,           3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error40: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(MdOrigInv_d,   MdOrigInv,       3*NN   * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error41: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-      
+    
+
+   int LARGE = 30;
+   cudaStatus = cudaMalloc((void**)&NmeshColors_d,      LARGE           * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error42: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   //cudaStatus = cudaMalloc((void**)&meshColors_d,       NE              * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&elementsOfColor_d,  NE              * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&sparseMapM_1d_d,    NE*NENv*NENv    * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&LtoGvel_1d_d,       NE*NENv*3       * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error45: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }      
+   cudaStatus = cudaMalloc((void**)&Sv_1d_d,            NGP*NENv        * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error46: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&gDSv_1d_d,          NE*NGP*NENv*3   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error47: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMalloc((void**)&GQfactor_1d_d,      NE*NGP          * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error48: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
+   cudaStatus = cudaMemcpy(NmeshColors_d,     NmeshColors,     LARGE           * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error49: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   //cudaStatus = cudaMemcpy(meshColors_d,      meshColors,      NE              * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error50: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(elementsOfColor_d, elementsOfColor, NE              * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error50: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(sparseMapM_1d_d,   sparseMapM_1d,   NE*NENv*NENv    * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error51: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(LtoGvel_1d_d,      LtoGvel_1d,      NE*NENv*3       * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error52: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(Sv_1d_d,           Sv_1d,           NGP*NENv        * sizeof(double),   cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error53: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(gDSv_1d_d,         gDSv_1d,         NE*NGP*NENv*3   * sizeof(double),   cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   cudaStatus = cudaMemcpy(GQfactor_1d_d,     GQfactor_1d,     NE*NGP          * sizeof(double),   cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+
 
    // Extract the 1st column of BCvelNodes and send it to the device.
    int *dummy;
@@ -354,16 +393,17 @@ void CUSP_CG_solver()
 {
    // Solve the system of step 2 [Z]{Pdot}={R2} using CG.
 
-   // Allocate right hand side vector RHS_d and solution vector soln_d in device memory.
-   cusp::array1d<double, cusp::device_memory> RHS_d(NNp);
-   cusp::array1d<double, cusp::device_memory> soln_d(NNp, 0);
-
-   // Copy right-hand-side vector to device memory
-   cudaStatus = cudaMemcpy(R2, R2_d, NNp * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error100: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   thrust::copy(R2, R2 + NNp, RHS_d.begin());
-
+   // Allocate right hand side vector RHS_d and solution vector soln_d in device memory.   
+   thrust::device_ptr<double> wrapped_R2_d(R2_d);
+   thrust::device_ptr<double> wrapped_Pdot_d(Pdot_d);
+   
+   typedef typename cusp::array1d_view< thrust::device_ptr<double> > DeviceValueArrayView;   
+   
+   DeviceValueArrayView RHS_d (wrapped_R2_d, wrapped_R2_d + NNp);
+   DeviceValueArrayView soln_d (wrapped_Pdot_d, wrapped_Pdot_d + NNp);  
+   
    // Set monitor
-   cusp::default_monitor<double> monitor(RHS_d, 1000, 1e-6);
+   cusp::default_monitor<double> monitor(RHS_d, 1000, 1e-12);
    //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
 
    // Set preconditioner
@@ -376,10 +416,6 @@ void CUSP_CG_solver()
    
    if (PRINT_TIMES) cout << "CUSP CG solver made " << monitor.iteration_count() << " iterations. Residual norm is " << monitor.residual_norm() << endl;
 
-                                                                                                                                                      // TODO: Try to minimize host-device memory transfers
-   thrust::copy(soln_d.begin(), soln_d.end(), Pdot);                                                                                                  // TODO: Is it not possible to copy soln_d directly to Pdot_d or use Pdot_d instead of soln_d not not define soln_d at all?
-   cudaStatus = cudaMemcpy(Pdot_d, Pdot, NNp * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error100.1: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   
    // CONTROL
    //for(int i = 0; i < NNp; i++) {
    //   cout << Pdot[i] << endl;
@@ -625,7 +661,310 @@ __global__ void multiplyVectors(int N, double *A, double *B, double *C)
 
 
 //========================================================================
-void step1GPUpart(void)
+__global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int offsetElements,
+                                       int *elementsOfColor,
+                                       int *LtoGvel, int *sparseMapM,
+                                       double *U, double *Sv, double *gDSv, double *GQfactor,
+                                       double *A)
+//========================================================================
+{
+
+   __shared__ double s_u[NENv_SIZE];
+   __shared__ double s_v[NENv_SIZE];
+   __shared__ double s_w[NENv_SIZE];
+   
+   __shared__ double s_u_GQ[NENv_SIZE*NGP_SIZE];
+   __shared__ double s_v_GQ[NENv_SIZE*NGP_SIZE];
+   __shared__ double s_w_GQ[NENv_SIZE*NGP_SIZE];
+   
+   __shared__ double s_Sv[NGP_SIZE*NENv_SIZE];
+   __shared__ double s_gDSv[NGP_SIZE*NENv_SIZE*DIM_SIZE];
+   
+   __shared__ double s_Ae[NENv_SIZE*NENv_SIZE];
+   
+   __shared__ int s_sparseMapM[NENv_SIZE*NENv_SIZE];
+   
+   int tid = threadIdx.x;
+   int bid = blockIdx.x;
+   int ebid = elementsOfColor[offsetElements + bid];
+
+   // Extract elemental u, v and w velocity values from the global
+   // solution array of the previous iteration.
+   if (tid < NENv) {
+      const int iLtoGu = LtoGvel[tid + ebid*NENv*3];
+      const int iLtoGv = LtoGvel[tid + ebid*NENv*3 + NENv];
+      const int iLtoGw = LtoGvel[tid + ebid*NENv*3 + NENv*2];
+      s_u[tid] = U[iLtoGu];
+      s_v[tid] = U[iLtoGv];
+      s_w[tid] = U[iLtoGw];
+   }
+   
+   //// CONTROL
+   //if (ebid == 0) {
+      //if (tid < NENv) {
+            //printf("s_u[%d] = %f \n", tid, s_u[tid]);
+            //printf("s_v[%d] = %f \n", tid, s_v[tid]);
+            //printf("s_w[%d] = %f \n", tid, s_w[tid]);
+      //}
+   //}
+   ////===========================================   
+   
+   // Copy shape functions to shared memory 
+   if (tid < NENv) {
+      for (int k = 0; k < NGP; k++) {
+         const int iSv = NENv*k+tid;
+         s_Sv[iSv] = Sv[iSv];
+      }
+   }
+   
+   //// CONTROL
+   //if (ebid == 0) {
+      //if (tid < NENv) {
+         //for (int k = 0; k < NGP; k++) {
+            //const int iSv = NENv*k+tid;
+            //printf("s_sV[%d] = %f \n", iSv, s_Sv[iSv]);
+         //}
+      //}
+   //}
+   ////===========================================
+   
+   // Copy elements gDSv to shared memory
+   if (tid < NENv) {
+      for (int k = 0; k < NGP; k++) {
+         for (int i = 0; i < 3; i++) { 
+            const int iGDSv1 = ebid*NENv*NGP*3+k*NENv*3+tid*3+i;
+            const int iGDSv2 = k*NENv*3+tid*3+i;
+            s_gDSv[iGDSv2] = gDSv[iGDSv1];
+         }
+      }  
+   }
+   
+   //// CONTROL
+   //if (ebid == 0) {
+      //if (tid < NENv) {
+         //for (int k = 0; k < NGP; k++) {
+            //for (int i = 0; i < 3; i++) { 
+               //const int iGDSv2 = k*NENv*3+tid*3+i;
+               //printf("s_gDSv[%d] = %f \n", iGDSv2, s_gDSv[iGDSv2]);
+            //}
+         //}  
+      //}
+   //}
+   ////===========================================     
+   
+   // Copy elemental local to global map to shared memory
+   if (tid < NENv) {
+      for (int i = 0; i < NENv; i++) {
+         const int iMap1 = ebid*NENv*NENv+i*NENv+tid;
+         const int iMap2 = i*NENv+tid;
+         s_sparseMapM[iMap2] = sparseMapM[iMap1];
+      }  
+   }
+   
+   //// CONTROL
+   //if (ebid == 0) {
+      //if (tid < NENv) {
+         //for (int i = 0; i < NENv; i++) {
+            //const int iMap2 = i*NENv+tid;
+            //printf("s_sparseMapM[%d] = %f \n", iMap2, s_sparseMapM[iMap2]);            
+         //}  
+      //}
+   //}
+   ////===========================================    
+   
+   // Initialize elemental stiffness matrix Ae
+   if (tid < NENv) {
+      for (int i = 0; i < NENv; i++) {
+         const int iAe = i*NENv+tid;
+         s_Ae[iAe] = 0.00000;
+      }  
+   }
+   
+   __syncthreads();  
+   
+      
+   // Initialize velocities at GQ points
+   if (tid < NGP) {
+      for (int i = 0; i < NENv; i++) {
+         const int iU = tid*NENv+i;
+         s_u_GQ[iU] = 0.00000;
+         s_v_GQ[iU] = 0.00000;
+         s_w_GQ[iU] = 0.00000;
+      }  
+   }               
+   
+   __syncthreads(); 
+   
+
+   if (tid < NGP) {
+      
+      // Above calculated u0 and v0 values are at the nodes. However in GQ
+      // integration we need them at GQ points.
+      for (int j = 0; j < NENv; j++) {       
+         for (int i = 0; i < NENv; i++) {
+            const int iSv  = tid*NENv+i;
+            const int iuGQ = tid*NENv+j;
+            s_u_GQ[iuGQ] += s_Sv[iSv] * s_u[i];
+            s_v_GQ[iuGQ] += s_Sv[iSv] * s_v[i];
+            s_w_GQ[iuGQ] += s_Sv[iSv] * s_w[i];
+         }
+      }
+   }
+   
+   //// CONTROL - NOT COMPLETE
+   //if (ebid == 0) {
+      //if (tid < NGP) {
+         
+         //// Above calculated u0 and v0 values are at the nodes. However in GQ
+         //// integration we need them at GQ points.
+         //for (int j = 0; j < NENv; j++) {       
+            //for (int i = 0; i < NENv; i++) {
+               //const int iSv  = tid*NENv+i;
+               //const int iuGQ = tid*NENv+j;
+               //s_u_GQ[iuGQ] += s_Sv[iSv] * s_u[i];
+               //s_v_GQ[iuGQ] += s_Sv[iSv] * s_v[i];
+               //s_w_GQ[iuGQ] += s_Sv[iSv] * s_w[i];
+            //}
+         //}
+      //}
+   //}
+   ////===========================================     
+   
+   __syncthreads();   
+   
+     
+   // Calculate elemental stiffnes matrix   
+   if (tid < NENv) {
+      
+      for (int k = 0; k < NGP; k++) {
+         
+         const double GQfactorThread = GQfactor[ebid*NGP+k];   
+         const int iU = k*NENv+tid;         
+               
+         for (int i = 0; i < NENv; i++) {
+            const int iGDSv = k*NENv*3+tid*3;
+            const int iAe = i*NENv+tid;
+            
+            s_Ae[iAe] += (s_u_GQ[iU] * s_gDSv[iGDSv] +
+                          s_v_GQ[iU] * s_gDSv[iGDSv+1] + 
+                          s_w_GQ[iU] * s_gDSv[iGDSv+2]) * s_Sv[k*NENv+i] * GQfactorThread;
+         
+         }
+      }
+      
+   }    
+    
+   __syncthreads();
+   
+
+   // Assemble stiffness matrix A
+   if (tid < NENv) {
+      for (int i = 0; i < NENv; i++) {
+         const int iAe = i*NENv+tid;
+         const int iA  = s_sparseMapM[iAe];
+         A[iA] += s_Ae[iAe];
+      }  
+   }
+   
+   //if (ebid == 0) {
+      //if (tid < NENv) {
+         //for (int i = 0; i < NENv; i++) {
+            //const int iAe = i*NENv+tid;
+            //Ae_control[iAe] = s_Ae[iAe];
+         //}  
+      //}
+   //}
+   
+}   
+
+
+
+
+
+//========================================================================
+void calculateMatrixAGPU()
+//========================================================================
+{
+   //double *Ae_CONTROL_d, *Ae_CONTROL;
+   
+   //Ae_CONTROL = new double[NENv*NENv];
+   //cudaStatus = cudaMalloc((void**)&Ae_CONTROL_d,    NENv*NENv    * sizeof(double));      if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   
+   //int offset_gDSv_1d_d;
+   //int offset_GQfactor_1d_d;
+   //int offset_SparseMapM_1d_d;
+   int offsetElements = 0;
+   
+   int nBlocksColor;
+   int nThreadsPerBlock = 32;
+   
+   //cudaStatus = cudaMemcpy(UnGPU, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput;}
+
+   // CONTROL
+   //cout << "i     U_cpu     U_gpu" << endl;
+   //for (int i=0; i < NN; i++) {
+      //cout << i << "  " << Un[i] << "   " << UnGPU[i] << "  " << Un[i]-UnGPU[i] << endl;
+   //}
+   
+   cudaMemset(A_d, 0, sparseM_NNZ/3*sizeof(double));
+      
+   for (int color = 0; color < 8; color++) {
+      
+      nBlocksColor = NmeshColors[color];
+      
+      //cout << endl;
+      //cout << "offset_" << NmeshColors[color] << " = " << offsetElements << endl;
+      
+      calcAndAssembleMatrixA<<<nBlocksColor,nThreadsPerBlock>>>(NE, NENv, NGP, NN, offsetElements,
+                                                                elementsOfColor_d,
+                                                                LtoGvel_1d_d, sparseMapM_1d_d,  
+                                                                Un_d, Sv_1d_d, gDSv_1d_d, GQfactor_1d_d,
+                                                                A_d);
+                                                                
+      offsetElements += NmeshColors[color];
+      
+   }   
+   
+   ////CONTROL
+   //double *sparseAvalueGPU; 
+   //sparseAvalueGPU = new double[sparseM_NNZ/3];
+   
+   //cudaStatus = cudaMemcpy(sparseAvalueGPU, A_d, sparseM_NNZ/3 * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error100.1: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   
+   //cout << "i    A_cpu     A_gpu" << endl;
+   //for (int i=1000; i < 1050; i++) {
+      //cout << i << "  " << sparseAvalueGPU[i] << endl;     
+   //}
+
+   
+   //double sumDiff = 0;
+   //for (int i = 0 ; i < sparseM_NNZ/3; i++) {
+      //sumDiff += sparseAvalue[i] - sparseAvalueGPU[i];
+   //}
+   
+   //cout << "sumDiff = " << sumDiff << endl;
+   
+   //delete []sparseAvalueGPU;
+   
+   //cudaStatus = cudaMemcpy(Ae_CONTROL, Ae_CONTROL_d, NENv*NENv * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error100.1: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }         
+   //cout << "stiffness element 1" << endl;
+   //int count = 0;
+   //for (int i = 0; i < NENv; i++) {
+      //for (int j = 0; j < NENv; j++) {
+         //cout << i << "  " << j << "  " << Ae_CONTROL[count] << endl;   // Assemble upper left sub-matrix of A
+         //count += 1;
+      //}
+   //}          
+   //=====================================
+   
+}  // End of function step2GPU()
+
+
+
+
+
+//========================================================================
+void step1GPUpart(int iter)
 //========================================================================
 {
    // CUSPARSE Reference: docs.nvidia.com/cuda/cusparse/index.html#appendix-b-cusparse-library-c---example
@@ -636,8 +975,6 @@ void step1GPUpart(void)
 
    int NNZM = sparseM_NNZ / 3;
    int NNZG = sparseG_NNZ / 3;
-
-   cudaStatus = cudaMemcpy(A_d, sparseAvalue,  NNZM * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error101: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
    double alpha = -1.000000000000000;
    double beta = 0.000000000000000;
@@ -744,7 +1081,7 @@ void step3GPU(int iter)
    // Calculate Unp1 (Unp1 = UnpHalf + dt * Acc)
    calculate_Unp1<<<NBLOCKS,NTHREADS>>>(3*NN, dt, Unp1_d, UnpHalf_d, Acc_d);                                                                                  // TODO: Use CUBLAS function
 
-   cudaStatus = cudaMemcpy(Unp1, Unp1_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error107: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   //cudaStatus = cudaMemcpy(Unp1, Unp1_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error107: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    
 }  // End of function step3GPU()
 
@@ -763,7 +1100,6 @@ void calculate_KtimesAcc_prevGPU(void)
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, K_d, MrowStarts_d, Mcol_d, Acc_prev_d,        &beta, KtimesAcc_prev_d);         //  1st part of [K] * {Acc_prev}
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, K_d, MrowStarts_d, Mcol_d, Acc_prev_d + NN,   &beta, KtimesAcc_prev_d + NN);    //  2nd part of [K] * {Acc_prev}
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, K_d, MrowStarts_d, Mcol_d, Acc_prev_d + 2*NN, &beta, KtimesAcc_prev_d + 2*NN);  //  3rd part of [K] * {Acc_prev}
-
 }  // End of function calculate_KtimesAcc_prevGPU()
 
 
