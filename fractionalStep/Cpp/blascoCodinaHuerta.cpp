@@ -2010,12 +2010,11 @@ void setupGQ()
    }
 
    GQweight = new double[NGP];
-
    
    if (eType == 1) {         // Hexahedral element
       if (NGP == 1)  {          // 1 point quadrature
          GQpoint[0][0] = 0.0;  GQpoint[0][1] = 0.0;  GQpoint[0][2] = 0.0;
-         GQweight[0] = 4.0;                                                                                                                          // TODO: Is this correct?
+         GQweight[0] = 4.0;                                                                                                                                    // TODO: Is this correct?
       } else if (NGP == 8)  {   // 8 point quadrature
        GQpoint[0][0] = -sqrt(1./3);   GQpoint[0][1] = -sqrt(1./3);   GQpoint[0][2] = -sqrt(1./3);
        GQpoint[1][0] = sqrt(1./3);    GQpoint[1][1] = -sqrt(1./3);   GQpoint[1][2] = -sqrt(1./3);
@@ -2034,9 +2033,9 @@ void setupGQ()
        GQweight[6] = 1.0;
        GQweight[7] = 1.0;
      } else if (NGP == 27) {    // 27 point quadrature
-       
-       // TODO : ...
-       
+ 
+     // TODO : ...
+ 
      }
      
    } else if (eType == 2) {  // Tetrahedral element  
@@ -2368,7 +2367,7 @@ void calcJacob()
    }
 
    for (int e = 0; e < NE; e++){
-      // Find e_ccord, coordinates for NEC corners of element e.
+      // Find e_coord, coordinates for NEC corners of element e.
       for (int i = 0; i < NEC; i++){
          iG = LtoGnode[e][i];
          e_coord[i][0] = coord[iG][0]; 
@@ -2569,8 +2568,7 @@ void initializeAndAllocate()
    } else {
       applyBC_initial();
    }
-   
-   
+
    createTecplot();
    
    
@@ -2682,7 +2680,9 @@ void timeLoop()
          if (PRINT_TIMES) printf("step3() took %6.3f seconds.\n", wallClockTime);
 
          waitForUser("Enter a character... ");
-
+         
+         Start = getHighResolutionTime(1, 1.0);
+         
          // Check for convergence
          #ifdef USECUDA
             if(checkConvergenceGPU()) {
@@ -2734,7 +2734,11 @@ void timeLoop()
             }
          #endif
 
-
+         wallClockTime = getHighResolutionTime(2, Start);
+         if (PRINT_TIMES) printf("checkConvergence() took %6.3f seconds.\n", wallClockTime);
+         
+         Start = getHighResolutionTime(1, 1.0);
+         
          // Calculate KtimesAcc_prev that'll be used in step2 and step3 of the coming iterations
          #ifdef USECUDA
             calculate_KtimesAcc_prevGPU();
@@ -2791,6 +2795,9 @@ void timeLoop()
          
          #endif // USECUDA
 
+         wallClockTime = getHighResolutionTime(2, Start);
+         if (PRINT_TIMES) printf("calcKtimesAcc() took %6.3f seconds.\n", wallClockTime);
+         
       }  // End of iter loop
      
      
@@ -2808,7 +2815,7 @@ void timeLoop()
          }
       #endif
      
-      if (timeN % 100 == 0 || abs(timeT - t_final) < 1e-10) {
+      if (timeN % 1000 == 0 || abs(timeT - t_final) < 1e-10) {
          #ifdef USECUDA
             cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
             cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -2825,7 +2832,8 @@ void timeLoop()
                 timeN, iter, timeT, Un[monPoint],
                 Un[NN+monPoint], Un[2*NN+monPoint], Pn[monPoint]);
       #endif
-
+      
+      
    }  // End of while loop for time
 
 }  // End of function timeLoop()
@@ -2849,6 +2857,9 @@ void step0()
 
    double **Me_11, **Ke_11, **Ge_1, **Ge_2, **Ge_3;
    double GQfactor;
+   double inverseDensity;
+   
+   inverseDensity = 1.0 / density;
 
    for (int i = 0; i < sparseM_NNZ/3; i++){
       sparseMvalue[i] = 0.0;
@@ -2910,9 +2921,9 @@ void step0()
 
          for (int i = 0; i < NENv; i++) {
             for (int j = 0; j < NENp; j++) {
-               Ge_1[i][j] = Ge_1[i][j] - Sp[k][j] * gDSv[e][k][i][0] * GQfactor;
-               Ge_2[i][j] = Ge_2[i][j] - Sp[k][j] * gDSv[e][k][i][1] * GQfactor;
-               Ge_3[i][j] = Ge_3[i][j] - Sp[k][j] * gDSv[e][k][i][2] * GQfactor;
+               Ge_1[i][j] = Ge_1[i][j] - inverseDensity * Sp[k][j] * gDSv[e][k][i][0] * GQfactor;
+               Ge_2[i][j] = Ge_2[i][j] - inverseDensity * Sp[k][j] * gDSv[e][k][i][1] * GQfactor;
+               Ge_3[i][j] = Ge_3[i][j] - inverseDensity * Sp[k][j] * gDSv[e][k][i][2] * GQfactor;
             }
          }
        
@@ -3338,7 +3349,10 @@ void step1(int iter)
 
    // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
    if (iter == 1) {
+      Start = getHighResolutionTime(1, 1.0);   
       calculateMatrixA();
+      wallClockTime = getHighResolutionTime(2, Start);
+      if (PRINT_TIMES) printf("calculateMatrixA() took %6.3f seconds.\n", wallClockTime);      
    }
 
 
@@ -3425,6 +3439,7 @@ void step1(int iter)
       //for (int i=0; i<3*NN; i++) {
       //   cout << UnpHalf[i] << endl;
       //}
+      // CONTROL     
 
       delete[] UnpHalf_prev1;
       delete[] UnpHalf_prev2;
@@ -3652,7 +3667,7 @@ void MKL_CG_solver(int iter)
    ipar[7] = 1;       // Perform iteration number based stopping check. Default is 1.
    ipar[8] = 1;       // Perform residual based stopping check. Default is 0.
    ipar[9] = 0;       // Do not perform user specified stopping check. Default is 1.
-   dpar[0] = 1e-10;   // Relative tolerance. Default is 1e-6.
+   dpar[0] = 1e-12;   // Relative tolerance. Default is 1e-6.
 
    int solverIter;
 
@@ -3703,8 +3718,8 @@ void applyBC_initial()
    //double x, y, z;
    int node, whichBC;
 
-   //int counter = 0;
-   //double x, y, z, velocity;
+   // int counter = 0;
+   // double x, y, z, velocity;
 
    // Apply velocity BCs
    for (int i = 0; i < BCnVelNodes; i++) {
@@ -3721,23 +3736,23 @@ void applyBC_initial()
       Un[node + 2*NN] = BCstr[whichBC][2];
 
       // Below is for the fully-developed inlet of the bending square duct problem
-      /*
-      if (whichBC == 0) {
-         counter++;
-         
-         x = coord[node][0];
-         y = coord[node][1];
-         z = coord[node][2];
-         
-         velocity = 2.25 * (4*y - 4*y*y) * (4*z - 4*z*z);   // Average u is 1.0
       
-         //printf("%d : %f   %f   %f   %f\n", counter, x, y, z, velocity);
+      // if (whichBC == 0) {
+         // counter++;
+         
+         // x = coord[node][0];
+         // y = coord[node][1];
+         // z = coord[node][2];
+         
+         // velocity = 2.25 * (4*y - 4*y*y) * (4*z - 4*z*z);   // Average u is 1.0
+      
+         // //printf("%d : %f   %f   %f   %f\n", counter, x, y, z, velocity);
 
-         Un[node]        = velocity;
-         Un[node + NN]   = 0.0;
-         Un[node + 2*NN] = 0.0;
-      }
-      */
+         // Un[node]        = velocity;
+         // Un[node + NN]   = 0.0;
+         // Un[node + 2*NN] = 0.0;
+      // }
+      
    }
 
    // CONTROL
@@ -3846,15 +3861,36 @@ void applyBC_Step3()
 
 
 
-//========================================================================
+//------------------------------------------------------------------------------
 void readRestartFile()
-//========================================================================
+//------------------------------------------------------------------------------
 {
+   // Reads the restart file, which is a Tecplot DAT file
 
-   // TODO ...
-   // See the end of this file for an earlier version
+   double dummy1, dummy2, dummy3, dummy4;
+   
+   ifstream restartFile;
+ 
+   restartFile.open((whichProblem + "_restart.dat").c_str(), ios::in);
+     
+   restartFile.ignore(256, '\n');   // Read and ignore the line
+   restartFile.ignore(256, '\n');   // Read and ignore the line
+   restartFile.ignore(256, '\n');   // Read and ignore the line
 
-}  // End of function readRestartFile()
+   // Read u, v, w and p values
+   for (int i = 0; i<NCN; i++) {
+      restartFile >> dummy1 >> dummy2 >> dummy3 >> Un[i] >> Un[NN + i] >> Un[2*NN + i] >> Pn[i];
+      restartFile.ignore(256, '\n');   // Ignore the rest of the line
+   }
+   
+   for (int i = NCN; i<NN; i++) {
+      restartFile >> dummy1 >> dummy2 >> dummy3 >> Un[i] >> Un[NN + i] >> Un[2*NN + i] >> dummy4;
+      restartFile.ignore(256, '\n');   // Ignore the rest of the line
+   }
+   
+   restartFile.close();
+   
+} // End of function readRestartFile()
 
 
 
