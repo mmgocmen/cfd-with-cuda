@@ -83,7 +83,7 @@
 
 #define _CRT_SECURE_NO_DEPRECATE    // This is necessary to avoid fopen() warning of MSVC.
 int N_MKL_THREADS = 8;              // Number of Intel MKL threads
-bool PRINT_TIMES = 0;               // Set to 1 to see the time taken by each step of the solver on the screen
+bool PRINT_TIMES = 1;               // Set to 1 to see the time taken by each step of the solver on the screen
 
 
 #include <stdio.h>
@@ -101,6 +101,7 @@ bool PRINT_TIMES = 0;               // Set to 1 to see the time taken by each st
 #include "mkl_blas.h"
 #include "mkl_spblas.h"
 #include "mkl_service.h"
+#include <limits>
 
 //extern "C" void mkl_freebuffers();
 
@@ -179,6 +180,10 @@ int **LtoGpres;    // Local to global mapping of pressure unknowns (size:NExNENp
 
 int **elemNeighbors;    // Neighbors of each element
 int *NelemNeighbors;    // Number of neighbors of each element
+
+int *meshColors;        // Colors of each mesh 
+int *NmeshColors;       // Number of elements at each color
+int *elementsOfColor;   // Elements at each color in a sorted way
 
 int nBC;                // Number of different boundary conditions.
 double *BCtype;         // Type of each BC. 1: Specified velocity
@@ -274,6 +279,10 @@ double *R2;               // RHS vector of pressure calculation.
 double *R3;               // RHS vector of new velocity calculation.
 double *R31, *R32, *R33;
 
+double *gDSv_1d, *GQfactor_1d, *Sv_1d;
+int    *sparseMapM_1d;
+int    *LtoGvel_1d;
+
 char dummyUserInput;      // Used for debugging
 
 
@@ -289,6 +298,12 @@ char dummyUserInput;      // Used for debugging
    double *Acc_d, *Acc_prev_d;
    double *KtimesAcc_prev_d;
    int    *BCvelNodes_d;  // Only the first column of BCvelNodes is necessary on the GPU
+   
+   int *NmeshColors_d, *meshColors_d, *elementsOfColor_d;
+   int *LtoGvel_1d_d;
+   int *sparseMapM_1d_d;
+   double *Sv_1d_d;
+   double *gDSv_1d_d, *GQfactor_1d_d;
 
    cusparseHandle_t            handle;
    cusparseMatDescr_t          descr;
@@ -309,6 +324,7 @@ char dummyUserInput;      // Used for debugging
 void readInputFile();
 double getHighResolutionTime(int, double);
 void findElemNeighbors();
+void setupMeshColoring();
 void setupNonCornerNodes();
 void setupLtoGdof();
 void determineVelBCnodes();
@@ -343,7 +359,8 @@ void waitForUser(string);
    void selectCUDAdevice();
    void initializeAndAllocateGPU();
    void calculateZ_CUSP();
-   void step1GPUpart();
+   void calculateMatrixAGPU();   
+   void step1GPUpart(int);
    void step2GPU(int);
    void step3GPU(int);
    void calculate_KtimesAcc_prevGPU();
@@ -402,6 +419,11 @@ int main()
    findElemNeighbors();                   // Finds neighbors of all elements.
    wallClockTime = getHighResolutionTime(2, Start);
    printf("findElemNeighbors()    took  %8.3f seconds.\n", wallClockTime);
+   
+   Start = getHighResolutionTime(1, 1.0);
+   setupMeshColoring();
+   wallClockTime = getHighResolutionTime(2, Start);
+   printf("setupMeshColoring()    took  %8.3f seconds.\n", wallClockTime);
 
    waitForUser("Enter a character... ");
 
@@ -811,6 +833,102 @@ void findElemNeighbors()
    
 
 }  // End of function findElemNeighbors()
+
+
+
+
+
+//========================================================================
+void setupMeshColoring()
+//========================================================================
+{
+   // Determines mesh coloring in order to prevent race condition at 
+   // the assembly of [A] at GPU.
+
+   int node, elem;
+   int LARGE = 30;   // Number of colors (It should be 8 for structured hexahedral meshes)                                                                                                                                  // TODO: 26 is the maximum number of elements for hexahedral elements. For tetrahedra's it'll be different
+   bool check;
+   int candidateColor; 
+   
+   meshColors      = new int[NE];
+   NmeshColors     = new int[LARGE];
+   elementsOfColor = new int[NE];
+
+   for (int e = 0; e < NE; e++) {
+      meshColors[e] = -1;
+   }
+   
+   for (int i = 0; i < LARGE; i++) {
+      NmeshColors[i] = 0;
+   }
+   
+   for (int e = 0; e < NE; e++) {
+      
+      candidateColor = 0;
+      
+      for (int i = 0; i < NelemNeighbors[e]; i++) {
+         elem = elemNeighbors[e][i];
+         if (candidateColor == meshColors[elem]) {
+            candidateColor = candidateColor + 1;
+            i = 0;
+         }
+      }
+      
+      meshColors[e] = candidateColor;
+      NmeshColors[candidateColor] = NmeshColors[candidateColor] + 1;
+      
+   }  // End of element loop
+
+   int count = 0;
+   for (int i = 0; i < LARGE; i++) {
+      if (NmeshColors[i] > 0) {
+         for (int e = 0; e < NE; e++) {
+            if (meshColors[e] == i) {
+               elementsOfColor[count] = e;
+               count = count + 1;
+            }
+         }
+      }
+   }
+   
+
+   // CONTROL
+   //for (int e = 0; e < NE; e++) {
+      //cout << e << ": " << meshColors[e] << endl;
+   //}
+   //cout << endl;
+   
+   //for (int e = 0; e < NE; e++) {
+      //cout << e << ": " << elementsOfColor[e] << endl;
+   //}
+   //cout << endl;
+      
+   //for (int i = 0; i < LARGE; i++) {
+      //cout << i << ": " << NmeshColors[i] << endl;
+   //}
+   //cout << endl;
+
+//int imin = std::numeric_limits<int>::min(); // minimum value
+//int imax = std::numeric_limits<int>::max();   
+
+//long lmin = std::numeric_limits<long>::min(); // minimum value
+//long lmax = std::numeric_limits<long>::max();  
+
+//long long llmin = std::numeric_limits<long long>::min(); // minimum value
+//long long llmax = std::numeric_limits<long long>::max();
+//cout << endl;
+//cout << "imin = " << imin << endl;
+//cout << "imax = " << imax << endl;
+//cout << "lmin = " << lmin << endl;
+//cout << "lmax = " << lmax << endl;
+//cout << "llmin = " << llmin << endl;
+//cout << "llmax = " << llmax << endl;
+//cout << sizeof(int) << endl;
+//cout << sizeof(short) << endl;
+//cout << sizeof(long) << endl;      
+   
+
+}  // End of function setupMeshColoring()
 
 
 
@@ -1240,19 +1358,31 @@ void setupLtoGdof()
          presCounter = presCounter + 1;
       }
    }
-
-   /*  CONTROL
-   for (int e=0; e<NE; e++) {
-      for(int i=0; i<3*NENv; i++) {
-         cout << e << "  " << i << "  " << LtoGvel[e][i] << endl;
+   
+   
+   LtoGvel_1d = new int[NE*NENv*3];
+   int count = 0;
+   
+   for (int e = 0; e < NE; e++) {
+      for (int i = 0; i < NENv*3; i++) {
+         LtoGvel_1d[count] = LtoGvel[e][i];
+         count = count + 1;
       }
-      cout << endl;
-      for(int i=0; i<NENp; i++) {
-         cout << e << "  " << i << "  " << LtoGpres[e][i] << endl;
-      }
-      cout << endl;
    }
-   */
+   
+
+   //  CONTROL
+   //for (int e=0; e<NE; e++) {
+      //for(int i=0; i<3*NENv; i++) {
+         //cout << e << "  " << i << "  " << LtoGvel[e][i] << " | " << LtoGvel_1d[e*NENv*3+i] << endl;
+      //}
+      //cout << endl;
+      ////for(int i=0; i<NENp; i++) {
+         ////cout << e << "  " << i << "  " << LtoGpres[e][i] << endl;
+      ////}
+      ////cout << endl;
+   //}
+   
 
 }  // End of function setupLtoGdof()
 
@@ -1736,17 +1866,33 @@ void setupSparseM()
          delete[] col;
       }
    }
+   
+   
+   sparseMapM_1d = new int[NE*NENv*NENv];
+      
+   int count = 0;
 
-   /* CONTROL
    for (int e = 0; e < NE; e++) {
       for (int i = 0; i < NENv; i++) {
          for (int j = 0; j < NENv; j++) {
-            cout << sparseMapM[e][i][j] << endl;
+            sparseMapM_1d[count] = sparseMapM[e][i][j];
+            count = count + 1;
          }
       }
-      cout << endl;
    }
-   */
+   
+   
+   // CONTROL
+   //for (int e = 0; e < NE; e++) {
+      //for (int i = 0; i < NENv; i++) {
+         //for (int j = 0; j < NENv; j++) {
+            //cout << e << "  " << i << "  " << j << "  " <<  sparseMapM[e][i][j] << " | " <<
+             //sparseMapM_1d[e*NENv*NENv + i*NENv + j] << endl;
+         //}
+      //}
+      //cout << endl;
+   //}
+   
 
    for (int i = 0; i<NN; i++) {
       delete[] NZcolsInARow[i];
@@ -2294,6 +2440,25 @@ void calcShape()
    
    }  // End of eType
 
+
+   Sv_1d = new double[NGP*NENv];
+   
+   int count = 0;
+   
+   for (int k = 0; k < NGP; k++) {
+      for (int i = 0; i < NENv; i++) {
+         Sv_1d[count] = Sv[k][i];
+         count = count + 1;
+      }
+   }
+   
+   // CONTROL
+   //for (int k = 0; k < NGP; k++) {
+      //for (int j = 0; j < NENv; j++) {
+         //cout << k << "  "  << j << "  " << Sv[k][j] << " | " << Sv_1d[k*NENv+j] << endl;
+      //}
+   //}   
+
    /* CONTROL
    for (int i = 0; i < 3; i++){
      for (int j = 0; j < NENp; j++) {
@@ -2459,7 +2624,55 @@ void calcJacob()
       }
    }
    */
-
+   
+   GQfactor_1d = new double[NE*NGP];
+   
+   int count = 0;
+   
+   for (int e = 0; e < NE; e++) {
+      for (int k = 0; k < NGP; k++) {
+         GQfactor_1d[count] = detJacob[e][k] * GQweight[k];
+         count = count + 1;
+      }
+   }
+   
+   // CONTROL
+   //for (int e = 0; e < NE; e++) {
+      //for (int k = 0; k < NGP; k++) {
+         //cout << e << "  " << k << "  " << detJacob[e][k] << "  " << GQweight[k] << " | " << GQfactor_1d[e*NGP + k] << endl;
+      //}
+   //}
+   
+   
+   gDSv_1d = new double[NE*NGP*NENv*3];
+   
+   count = 0;
+   
+   for (int e = 0; e < NE; e++) {
+      for (int k = 0; k < NGP; k++) {
+         for (int j = 0; j < NENv; j++) {
+            for (int i = 0; i < 3; i++) {
+               gDSv_1d[count] = gDSv[e][k][j][i];
+               count = count + 1;
+            }
+         }
+      }
+   }   
+   
+   // CONTROL
+   //cout << endl;
+   //cout << " GDSV " << endl;
+   //for (int e = 0; e < 2; e++){
+      //for (int i = 0; i < NGP; i++){
+         //for (int j = 0; j < NENv; j++) {
+            //for (int k = 0; k < 3; k++) {
+               //cout << e << "  " << i << "  " << j << "  " << k << "  " << gDSv[e][i][j][k] << " | " << 
+                  //gDSv_1d[e*NGP*NENv*3+i*NENv*3+j*3+k] << endl;
+            //}
+         //}
+      //}
+      //cout << endl;
+   //}   
 
    // Deallocate unnecessary variables
 
@@ -2633,6 +2846,7 @@ void timeLoop()
          cudaStatus = cudaMemcpy(Pnp1_prev_d,    Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error46: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
          cudaStatus = cudaMemset((void *)Acc_prev_d, 0, 3*NN * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error47: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+         cudaThreadSynchronize();
       #else
          for (int i = 0; i < 3*NN; i++) {
             UnpHalf_prev[i] = Un[i];
@@ -2661,6 +2875,7 @@ void timeLoop()
          Start = getHighResolutionTime(1, 1.0);
          #ifdef USECUDA
             step2GPU(iter);
+            cudaThreadSynchronize();
          #else
             step2(iter);
          #endif
@@ -2673,6 +2888,7 @@ void timeLoop()
          Start = getHighResolutionTime(1, 1.0);
          #ifdef USECUDA
             step3GPU(iter);
+            cudaThreadSynchronize();
          #else
             step3(iter);
          #endif
@@ -2694,6 +2910,7 @@ void timeLoop()
                cudaStatus = cudaMemcpy(Acc_prev_d,     Acc_d,     3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error50: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
                cudaStatus = cudaMemcpy(Pnp1_prev_d,    Pnp1_d,    NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error51: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
             }
+            cudaThreadSynchronize();
          #else
             double sum1, sum2;
             sum1 = 0.0;
@@ -2742,6 +2959,7 @@ void timeLoop()
          // Calculate KtimesAcc_prev that'll be used in step2 and step3 of the coming iterations
          #ifdef USECUDA
             calculate_KtimesAcc_prevGPU();
+            cudaThreadSynchronize();
          #else
             char transa, matdescra[6];
             double alpha, beta;
@@ -2805,6 +3023,7 @@ void timeLoop()
       #ifdef USECUDA
          cudaStatus = cudaMemcpy(Un_d, Unp1_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error52: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
          cudaStatus = cudaMemcpy(Pn_d, Pnp1_d, NNp  * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error53: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+         cudaThreadSynchronize();
       #else
          for (int i = 0; i < 3*NN; i++) {
             Un[i] = Unp1[i];
@@ -2819,6 +3038,7 @@ void timeLoop()
          #ifdef USECUDA
             cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
             cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+            cudaThreadSynchronize();
          #endif
          createTecplot();
       }
@@ -2827,6 +3047,7 @@ void timeLoop()
       // Print monitor point data                                                                                                                    // TODO: If convergence is not achieved iter is written as iterMax+1, which is not correct.
       #ifdef USECUDA
          printMonitorDataGPU(iter);
+         cudaThreadSynchronize();
       #else
          printf("%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n",
                 timeN, iter, timeT, Un[monPoint],
@@ -3309,7 +3530,15 @@ void calculateMatrixA()
          }       
       } // GQ loop
      
-     
+      // if (e==0){
+         // for (int i = 0; i < NENv; i++) {
+            // for (int j = 0; j < NENv; j++) {
+               // cout << i << "  " << j << "  " << Ae_11[i][j] << endl;   // Assemble upper left sub-matrix of A
+            // }
+         // }         
+      // }
+      
+      
       // Assemble Ae into sparse A.
       for (int i = 0; i < NENv; i++) {
          for (int j = 0; j < NENv; j++) {
@@ -3347,14 +3576,20 @@ void step1(int iter)
    
    double Start, wallClockTime;
 
-   // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
    if (iter == 1) {
-      Start = getHighResolutionTime(1, 1.0);   
-      calculateMatrixA();
+      // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
+      Start = getHighResolutionTime(1, 1.0); 
+      
+      #ifdef USECUDA
+         calculateMatrixAGPU();
+         cudaThreadSynchronize();
+      #else
+         calculateMatrixA();
+      #endif
+      
       wallClockTime = getHighResolutionTime(2, Start);
-      if (PRINT_TIMES) printf("calculateMatrixA() took %6.3f seconds.\n", wallClockTime);      
+      if (PRINT_TIMES) printf("calculateMatrixA() took %6.3f seconds.\n", wallClockTime); 
    }
-
 
    // Calculate the RHS vector of step 1.
    // R1 = - K * UnpHalf_prev - A * UnpHalf_prev - G * Pn;
@@ -3362,7 +3597,8 @@ void step1(int iter)
    Start = getHighResolutionTime(1, 1.0);
    
    #ifdef USECUDA
-      step1GPUpart();
+      step1GPUpart(iter);
+      cudaThreadSynchronize();
    #else
       char transa, matdescra[6];
       double alpha = -1.0;
