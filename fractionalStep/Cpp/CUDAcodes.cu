@@ -363,7 +363,7 @@ void CUSP_CG_solver()
    thrust::copy(R2, R2 + NNp, RHS_d.begin());
 
    // Set monitor
-   cusp::default_monitor<double> monitor(RHS_d, 1000, 1e-7);
+   cusp::default_monitor<double> monitor(RHS_d, 1000, 1e-6);
    //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
 
    // Set preconditioner
