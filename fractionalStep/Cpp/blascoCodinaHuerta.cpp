@@ -184,6 +184,7 @@ int *NelemNeighbors;    // Number of neighbors of each element
 int *meshColors;        // Colors of each mesh 
 int *NmeshColors;       // Number of elements at each color
 int *elementsOfColor;   // Elements at each color in a sorted way
+int nActiveColors;      // Number of different colors in mesh
 
 int nBC;                // Number of different boundary conditions.
 double *BCtype;         // Type of each BC. 1: Specified velocity
@@ -879,9 +880,13 @@ void setupMeshColoring()
       
    }  // End of element loop
 
+   
    int count = 0;
+   nActiveColors = 0;
    for (int i = 0; i < LARGE; i++) {
       if (NmeshColors[i] > 0) {
+         cout << "color" << i << " has" << NmeshColors[i] << endl; 
+         nActiveColors = nActiveColors + 1;
          for (int e = 0; e < NE; e++) {
             if (meshColors[e] == i) {
                elementsOfColor[count] = e;
@@ -892,6 +897,7 @@ void setupMeshColoring()
    }
    
 
+   cout << "Number of active colors = " << nActiveColors << endl;
    // CONTROL
    //for (int e = 0; e < NE; e++) {
       //cout << e << ": " << meshColors[e] << endl;
@@ -3903,6 +3909,7 @@ void MKL_CG_solver(int iter)
    ipar[7] = 1;       // Perform iteration number based stopping check. Default is 1.
    ipar[8] = 1;       // Perform residual based stopping check. Default is 0.
    ipar[9] = 0;       // Do not perform user specified stopping check. Default is 1.
+   ipar[10] = 1;      // Perform Jacobi Preconditioner   
    dpar[0] = 1e-12;   // Relative tolerance. Default is 1e-6.
 
    int solverIter;
@@ -4093,6 +4100,7 @@ void applyBC_Step3()
      R3[node + 2*NN] = 0.0;  // This is not velocity, but velocity difference between 2 iterations.
    }
 }  // End of function applyBC_Step3()
+
 
 
 

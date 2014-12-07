@@ -81,6 +81,7 @@ extern void createTecplot();
 
 extern int NE, NGP, NENv;
 extern int *NmeshColors, *meshColors, *elementsOfColor;
+extern int nActiveColors;
 extern int *LtoGvel_1d;
 extern int *sparseMapM_1d;
 extern double *Sv_1d;
@@ -239,6 +240,8 @@ void initializeAndAllocateGPU()
    cudaStatus = cudaMemcpy(Un_d, Un, 3*NN * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(Pn_d, Pn, NNp  * sizeof(double), cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
+   // Initialize Pdot
+   cudaMemset(Pdot_d, 0, NNp*sizeof(double));
 
    cudaMemGetInfo(&freeGPUmemory, &totalGPUmemory);
    cout << endl;
@@ -445,16 +448,20 @@ __global__ void getMonitorData(int monPoint, int NN, double *Un_d, double *Pn_d,
 __global__ void applyVelBC(int Nbc, int N, int *velBCdata, double *A)
 //========================================================================
 {
+   int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    
    // Change R1 for known velocity BCs
    int node;
 
-   for (int i = 0; i < Nbc; i++) {
-      node = velBCdata[i];   // Node at which this velocity BC is specified.
+   while (tid < Nbc) {
+      node = velBCdata[tid];   // Node at which this velocity BC is specified.
      
       // Change R1 for the given u and v velocities.
       A[node]       = 0.0;   // This is not velocity, but velocity difference between 2 iterations.
       A[node + N]   = 0.0;   // This is not velocity, but velocity difference between 2 iterations.
       A[node + 2*N] = 0.0;   // This is not velocity, but velocity difference between 2 iterations.
+      
+      tid += blockDim.x * gridDim.x;      
    }
 }
 
@@ -908,7 +915,7 @@ void calculateMatrixAGPU()
    
    cudaMemset(A_d, 0, sparseM_NNZ/3*sizeof(double));
       
-   for (int color = 0; color < 8; color++) {
+   for (int color = 0; color < nActiveColors; color++) {
       
       nBlocksColor = NmeshColors[color];
       
@@ -991,7 +998,7 @@ void step1GPUpart(int iter)
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NNp, NNZG, &alpha, descr, G2_d, GrowStarts_d, Gcol_d, Pn_d, &beta, R1_d + NN);                   // Part of (- G1 * Pn)
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NNp, NNZG, &alpha, descr, G3_d, GrowStarts_d, Gcol_d, Pn_d, &beta, R1_d + 2*NN);                 // Part of (- G1 * Pn)
 
-   applyVelBC<<<1,1>>>(BCnVelNodes, NN, BCvelNodes_d, R1_d);
+   applyVelBC<<<NBLOCKS,NTHREADS>>>(BCnVelNodes, NN, BCvelNodes_d, R1_d);
 
    // Calculate UnpHalf
    calculate_UnpHalf<<<NBLOCKS,NTHREADS>>>(3*NN, dt, UnpHalf_d, Un_d, R1_d, MdInv_d);
@@ -1073,7 +1080,7 @@ void step3GPU(int iter)
       calculate_R3<<<NBLOCKS,NTHREADS>>>(3*NN, dt, R3_d, KtimesAcc_prev_d);
    }
 
-   applyVelBC<<<1,1>>>(BCnVelNodes, NN, BCvelNodes_d, R3_d);
+   applyVelBC<<<NBLOCKS,NTHREADS>>>(BCnVelNodes, NN, BCvelNodes_d, R3_d);
 
    // Calculate Acc (Acc = R3 * MdInv)
    multiplyVectors<<<NBLOCKS,NTHREADS>>>(3*NN, Acc_d, R3_d, MdInv_d);                                                                                         // TODO: Use CUBLAS function
