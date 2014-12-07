@@ -3582,20 +3582,19 @@ void step1(int iter)
    
    double Start, wallClockTime;
 
-   if (iter == 1) {
+   Start = getHighResolutionTime(1, 1.0); 
+   #ifdef USECUDA
+	  // Don't assemble A but calculate [A]*u at each iteration     
+      calculateMatrixAGPU();
+      cudaThreadSynchronize();
+   #else
+      if (iter == 1) {
       // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
-      Start = getHighResolutionTime(1, 1.0); 
-      
-      #ifdef USECUDA
-         calculateMatrixAGPU();
-         cudaThreadSynchronize();
-      #else
-         calculateMatrixA();
-      #endif
-      
-      wallClockTime = getHighResolutionTime(2, Start);
-      if (PRINT_TIMES) printf("calculateMatrixA() took %6.3f seconds.\n", wallClockTime); 
-   }
+      calculateMatrixA();
+      }
+   #endif
+   wallClockTime = getHighResolutionTime(2, Start);
+   if (PRINT_TIMES) printf("calculateMatrixA() took %6.3f seconds.\n", wallClockTime); 
 
    // Calculate the RHS vector of step 1.
    // R1 = - K * UnpHalf_prev - A * UnpHalf_prev - G * Pn;

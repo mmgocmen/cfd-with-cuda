@@ -158,7 +158,7 @@ void initializeAndAllocateGPU()
    int NNZG = sparseG_NNZ / 3;
 
    cudaStatus = cudaMalloc((void**)&K_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error01: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&A_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error02: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   // cudaStatus = cudaMalloc((void**)&A_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error02: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&G1_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error03: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&G2_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error04: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&G3_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error05: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -210,7 +210,7 @@ void initializeAndAllocateGPU()
    cudaStatus = cudaMalloc((void**)&NmeshColors_d,      LARGE           * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error42: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    //cudaStatus = cudaMalloc((void**)&meshColors_d,       NE              * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&elementsOfColor_d,  NE              * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error43: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMalloc((void**)&sparseMapM_1d_d,    NE*NENv*NENv    * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   //cudaStatus = cudaMalloc((void**)&sparseMapM_1d_d,    NE*NENv*NENv    * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&LtoGvel_1d_d,       NE*NENv*3       * sizeof(int));      if(cudaStatus != cudaSuccess) { printf("Error45: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }      
    cudaStatus = cudaMalloc((void**)&Sv_1d_d,            NGP*NENv        * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error46: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&gDSv_1d_d,          NE*NGP*NENv*3   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error47: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -219,7 +219,7 @@ void initializeAndAllocateGPU()
    cudaStatus = cudaMemcpy(NmeshColors_d,     NmeshColors,     LARGE           * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error49: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    //cudaStatus = cudaMemcpy(meshColors_d,      meshColors,      NE              * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error50: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(elementsOfColor_d, elementsOfColor, NE              * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error50: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   cudaStatus = cudaMemcpy(sparseMapM_1d_d,   sparseMapM_1d,   NE*NENv*NENv    * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error51: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   //cudaStatus = cudaMemcpy(sparseMapM_1d_d,   sparseMapM_1d,   NE*NENv*NENv    * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error51: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(LtoGvel_1d_d,      LtoGvel_1d,      NE*NENv*3       * sizeof(int),      cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error52: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(Sv_1d_d,           Sv_1d,           NGP*NENv        * sizeof(double),   cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error53: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(gDSv_1d_d,         gDSv_1d,         NE*NGP*NENv*3   * sizeof(double),   cudaMemcpyHostToDevice);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -670,9 +670,10 @@ __global__ void multiplyVectors(int N, double *A, double *B, double *C)
 //========================================================================
 __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int offsetElements,
                                        int *elementsOfColor,
-                                       int *LtoGvel, int *sparseMapM,
-                                       double *U, double *Sv, double *gDSv, double *GQfactor,
-                                       double *A)
+                                       int *LtoGvel,
+                                       double *U, double *U_prev,
+                                       double *Sv, double *gDSv, double *GQfactor,
+                                       double *R1)
 //========================================================================
 {
 
@@ -680,16 +681,20 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
    __shared__ double s_v[NENv_SIZE];
    __shared__ double s_w[NENv_SIZE];
    
-   __shared__ double s_u_GQ[NENv_SIZE*NGP_SIZE];
-   __shared__ double s_v_GQ[NENv_SIZE*NGP_SIZE];
-   __shared__ double s_w_GQ[NENv_SIZE*NGP_SIZE];
+   __shared__ double s_u_prev[NENv_SIZE];
+   __shared__ double s_v_prev[NENv_SIZE];
+   __shared__ double s_w_prev[NENv_SIZE];
+   
+   __shared__ double s_u_GQ[NGP_SIZE];
+   __shared__ double s_v_GQ[NGP_SIZE];
+   __shared__ double s_w_GQ[NGP_SIZE];
    
    __shared__ double s_Sv[NGP_SIZE*NENv_SIZE];
    __shared__ double s_gDSv[NGP_SIZE*NENv_SIZE*DIM_SIZE];
    
-   __shared__ double s_Ae[NENv_SIZE*NENv_SIZE];
+   __shared__ double s_Ae[NENv_SIZE*NENv_SIZE];   
    
-   __shared__ int s_sparseMapM[NENv_SIZE*NENv_SIZE];
+   __shared__ double s_R1e[3*NENv_SIZE];
    
    int tid = threadIdx.x;
    int bid = blockIdx.x;
@@ -704,6 +709,9 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
       s_u[tid] = U[iLtoGu];
       s_v[tid] = U[iLtoGv];
       s_w[tid] = U[iLtoGw];
+      s_u_prev[tid] = U_prev[iLtoGu];
+      s_v_prev[tid] = U_prev[iLtoGv];
+      s_w_prev[tid] = U_prev[iLtoGw];   
    }
    
    //// CONTROL
@@ -757,27 +765,7 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
          //}  
       //}
    //}
-   ////===========================================     
-   
-   // Copy elemental local to global map to shared memory
-   if (tid < NENv) {
-      for (int i = 0; i < NENv; i++) {
-         const int iMap1 = ebid*NENv*NENv+i*NENv+tid;
-         const int iMap2 = i*NENv+tid;
-         s_sparseMapM[iMap2] = sparseMapM[iMap1];
-      }  
-   }
-   
-   //// CONTROL
-   //if (ebid == 0) {
-      //if (tid < NENv) {
-         //for (int i = 0; i < NENv; i++) {
-            //const int iMap2 = i*NENv+tid;
-            //printf("s_sparseMapM[%d] = %f \n", iMap2, s_sparseMapM[iMap2]);            
-         //}  
-      //}
-   //}
-   ////===========================================    
+   ////===========================================
    
    // Initialize elemental stiffness matrix Ae
    if (tid < NENv) {
@@ -785,38 +773,34 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
          const int iAe = i*NENv+tid;
          s_Ae[iAe] = 0.00000;
       }  
-   }
+   }      
    
-   __syncthreads();  
+   // Initialize elemental stiffness matrix R1e
+   if (tid < NENv) {
+      s_R1e[tid]        = 0.00000;
+      s_R1e[tid+NENv]   = 0.00000;
+      s_R1e[tid+2*NENv] = 0.00000;
+   }              
    
-      
-   // Initialize velocities at GQ points
-   if (tid < NGP) {
-      for (int i = 0; i < NENv; i++) {
-         const int iU = tid*NENv+i;
-         s_u_GQ[iU] = 0.00000;
-         s_v_GQ[iU] = 0.00000;
-         s_w_GQ[iU] = 0.00000;
-      }  
-   }               
-   
-   __syncthreads(); 
+   __syncthreads();
    
 
-   if (tid < NGP) {
-      
-      // Above calculated u0 and v0 values are at the nodes. However in GQ
-      // integration we need them at GQ points.
-      for (int j = 0; j < NENv; j++) {       
-         for (int i = 0; i < NENv; i++) {
-            const int iSv  = tid*NENv+i;
-            const int iuGQ = tid*NENv+j;
-            s_u_GQ[iuGQ] += s_Sv[iSv] * s_u[i];
-            s_v_GQ[iuGQ] += s_Sv[iSv] * s_v[i];
-            s_w_GQ[iuGQ] += s_Sv[iSv] * s_w[i];
-         }
-      }
-   }
+	if (tid < NGP) {
+	// Above calculated u0 and v0 values are at the nodes. However in GQ
+	// integration we need them at GQ points.
+	
+	   // Initialize velocities at GQ points
+       s_u_GQ[tid] = 0.00000;
+       s_v_GQ[tid] = 0.00000;
+       s_w_GQ[tid] = 0.00000;
+       
+	   for (int i = 0; i < NENv; i++) {
+	      const int iSv = tid*NENv+i;
+	      s_u_GQ[tid] += s_Sv[iSv] * s_u[i];
+	      s_v_GQ[tid] += s_Sv[iSv] * s_v[i];
+	      s_w_GQ[tid] += s_Sv[iSv] * s_w[i];
+	   }
+	}
    
    //// CONTROL - NOT COMPLETE
    //if (ebid == 0) {
@@ -845,16 +829,17 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
       
       for (int k = 0; k < NGP; k++) {
          
-         const double GQfactorThread = GQfactor[ebid*NGP+k];   
-         const int iU = k*NENv+tid;         
+         const double GQfactorThread = GQfactor[ebid*NGP+k];
+             
                
          for (int i = 0; i < NENv; i++) {
             const int iGDSv = k*NENv*3+tid*3;
             const int iAe = i*NENv+tid;
+            const int iSv = k*NENv+i;
             
-            s_Ae[iAe] += (s_u_GQ[iU] * s_gDSv[iGDSv] +
-                          s_v_GQ[iU] * s_gDSv[iGDSv+1] + 
-                          s_w_GQ[iU] * s_gDSv[iGDSv+2]) * s_Sv[k*NENv+i] * GQfactorThread;
+            s_Ae[iAe] += (s_u_GQ[k] * s_gDSv[iGDSv] +
+                          s_v_GQ[k] * s_gDSv[iGDSv+1] + 
+                          s_w_GQ[k] * s_gDSv[iGDSv+2]) * s_Sv[iSv] * GQfactorThread;
          
          }
       }
@@ -864,14 +849,26 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
    __syncthreads();
    
 
-   // Assemble stiffness matrix A
+   // Calculate elemental R1 (right hand side vector), R1e
    if (tid < NENv) {
       for (int i = 0; i < NENv; i++) {
-         const int iAe = i*NENv+tid;
-         const int iA  = s_sparseMapM[iAe];
-         A[iA] += s_Ae[iAe];
-      }  
+         const int iAe = tid*NENv+i;
+         s_R1e[tid]        += s_Ae[iAe] * s_u_prev[i];    
+         s_R1e[tid+NENv]   += s_Ae[iAe] * s_v_prev[i];     
+         s_R1e[tid+2*NENv] += s_Ae[iAe] * s_w_prev[i];     
+      }
    }
+   
+   if (tid < NENv) {
+      const int iLtoGu = LtoGvel[tid + ebid*NENv*3];
+      const int iLtoGv = LtoGvel[tid + ebid*NENv*3 + NENv];
+      const int iLtoGw = LtoGvel[tid + ebid*NENv*3 + NENv*2];   
+      R1[iLtoGu] += -1.00000*s_R1e[tid];    
+      R1[iLtoGv] += -1.00000*s_R1e[tid+NENv];     
+      R1[iLtoGw] += -1.00000*s_R1e[tid+2*NENv]; 
+   }   
+   
+   
    
    //if (ebid == 0) {
       //if (tid < NENv) {
@@ -882,7 +879,7 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
       //}
    //}
    
-}   
+}  // End of function calcAndAssembleMatrixA()   
 
 
 
@@ -892,29 +889,18 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
 void calculateMatrixAGPU()
 //========================================================================
 {
-   //double *Ae_CONTROL_d, *Ae_CONTROL;
-   
-   //Ae_CONTROL = new double[NENv*NENv];
-   //cudaStatus = cudaMalloc((void**)&Ae_CONTROL_d,    NENv*NENv    * sizeof(double));      if(cudaStatus != cudaSuccess) { printf("Error44: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   
+   // Calculate Ae and multiply them with Ue.
+
    //int offset_gDSv_1d_d;
    //int offset_GQfactor_1d_d;
    //int offset_SparseMapM_1d_d;
    int offsetElements = 0;
-   
    int nBlocksColor;
    int nThreadsPerBlock = 32;
    
-   //cudaStatus = cudaMemcpy(UnGPU, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput;}
-
-   // CONTROL
-   //cout << "i     U_cpu     U_gpu" << endl;
-   //for (int i=0; i < NN; i++) {
-      //cout << i << "  " << Un[i] << "   " << UnGPU[i] << "  " << Un[i]-UnGPU[i] << endl;
-   //}
+   //cudaMemset(A_d, 0, sparseM_NNZ/3*sizeof(double));
+   cudaMemset(R1_d, 0, 3*NN*sizeof(double));
    
-   cudaMemset(A_d, 0, sparseM_NNZ/3*sizeof(double));
-      
    for (int color = 0; color < nActiveColors; color++) {
       
       nBlocksColor = NmeshColors[color];
@@ -924,47 +910,16 @@ void calculateMatrixAGPU()
       
       calcAndAssembleMatrixA<<<nBlocksColor,nThreadsPerBlock>>>(NE, NENv, NGP, NN, offsetElements,
                                                                 elementsOfColor_d,
-                                                                LtoGvel_1d_d, sparseMapM_1d_d,  
-                                                                Un_d, Sv_1d_d, gDSv_1d_d, GQfactor_1d_d,
-                                                                A_d);
+                                                                LtoGvel_1d_d,  
+                                                                Un_d, UnpHalf_prev_d,
+                                                                Sv_1d_d, gDSv_1d_d, GQfactor_1d_d,
+                                                                R1_d);
                                                                 
       offsetElements += NmeshColors[color];
       
-   }   
+   }
    
-   ////CONTROL
-   //double *sparseAvalueGPU; 
-   //sparseAvalueGPU = new double[sparseM_NNZ/3];
-   
-   //cudaStatus = cudaMemcpy(sparseAvalueGPU, A_d, sparseM_NNZ/3 * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error100.1: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   
-   //cout << "i    A_cpu     A_gpu" << endl;
-   //for (int i=1000; i < 1050; i++) {
-      //cout << i << "  " << sparseAvalueGPU[i] << endl;     
-   //}
-
-   
-   //double sumDiff = 0;
-   //for (int i = 0 ; i < sparseM_NNZ/3; i++) {
-      //sumDiff += sparseAvalue[i] - sparseAvalueGPU[i];
-   //}
-   
-   //cout << "sumDiff = " << sumDiff << endl;
-   
-   //delete []sparseAvalueGPU;
-   
-   //cudaStatus = cudaMemcpy(Ae_CONTROL, Ae_CONTROL_d, NENv*NENv * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error100.1: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }         
-   //cout << "stiffness element 1" << endl;
-   //int count = 0;
-   //for (int i = 0; i < NENv; i++) {
-      //for (int j = 0; j < NENv; j++) {
-         //cout << i << "  " << j << "  " << Ae_CONTROL[count] << endl;   // Assemble upper left sub-matrix of A
-         //count += 1;
-      //}
-   //}          
-   //=====================================
-   
-}  // End of function step2GPU()
+}  // End of function calculateMatrixAGPU() 
 
 
 
@@ -984,15 +939,10 @@ void step1GPUpart(int iter)
    int NNZG = sparseG_NNZ / 3;
 
    double alpha = -1.000000000000000;
-   double beta = 0.000000000000000;
+   double beta = 1.000000000000000;
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, K_d, MrowStarts_d, Mcol_d, UnpHalf_prev_d, &beta, R1_d);                // Part of (- K * UnpHalf_prev)
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, K_d, MrowStarts_d, Mcol_d, UnpHalf_prev_d + NN, &beta, R1_d + NN);      // Part of (- K * UnpHalf_prev)
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, K_d, MrowStarts_d, Mcol_d, UnpHalf_prev_d + 2*NN, &beta, R1_d + 2*NN);  // Part of (- K * UnpHalf_prev)
-
-   beta = 1.000000000000000;
-   cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, A_d, MrowStarts_d, Mcol_d, UnpHalf_prev_d, &beta, R1_d);                // Part of (- A * UnpHalf_prev)
-   cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, A_d, MrowStarts_d, Mcol_d, UnpHalf_prev_d + NN, &beta, R1_d + NN);      // Part of (- A * UnpHalf_prev)
-   cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NN, NNZM, &alpha, descr, A_d, MrowStarts_d, Mcol_d, UnpHalf_prev_d + 2*NN, &beta, R1_d + 2*NN);  // Part of (- A * UnpHalf_prev)
 
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NNp, NNZG, &alpha, descr, G1_d, GrowStarts_d, Gcol_d, Pn_d, &beta, R1_d);                        // Part of (- G1 * Pn)
    cusparseDcsrmv(handle, CUSPARSE_OPERATION_NON_TRANSPOSE, NN, NNp, NNZG, &alpha, descr, G2_d, GrowStarts_d, Gcol_d, Pn_d, &beta, R1_d + NN);                   // Part of (- G1 * Pn)
