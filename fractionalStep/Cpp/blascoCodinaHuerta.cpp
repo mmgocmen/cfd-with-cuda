@@ -159,6 +159,7 @@ double timeT;      // Actual time
 
 int    maxIter;    // Maximum iteration number performed inside each time step
 double tolerance;  // Tolerance for the iterations performed in each time step
+double convergenceCriteria;   // Convergence criteria for steady state problems
 
 bool   isRestart;  // Switch that defines if solver continues from a previous
                    // solution or starts from the initial condition
@@ -184,7 +185,7 @@ int *NelemNeighbors;    // Number of neighbors of each element
 int *meshColors;        // Colors of each mesh 
 int *NmeshColors;       // Number of elements at each color
 int *elementsOfColor;   // Elements at each color in a sorted way
-int nActiveColors;      // Number of different colors in mesh
+int nActiveColors;      // Number of different colors in mesh 
 
 int nBC;                // Number of different boundary conditions.
 double *BCtype;         // Type of each BC. 1: Specified velocity
@@ -284,6 +285,9 @@ double *gDSv_1d, *GQfactor_1d, *Sv_1d;
 int    *sparseMapM_1d;
 int    *LtoGvel_1d;
 
+double StartCurrentTimeStep, wallClockTimeCurrentTimeStep;
+bool checkAccConvergence;
+double maxAcc;
 char dummyUserInput;      // Used for debugging
 
 
@@ -366,6 +370,7 @@ void waitForUser(string);
    void step3GPU(int);
    void calculate_KtimesAcc_prevGPU();
    bool checkConvergenceGPU();
+   bool checkConvergenceInTimeGPU();   
    void printMonitorDataGPU(int);
  #endif
 
@@ -2809,7 +2814,12 @@ void timeLoop()
 
    double Start, wallClockTime;
    int iter;
-
+   
+   double oneOverdt = 1.0000000000000000 / dt;
+   double dummyAcc;
+   convergenceCriteria = 0.001;
+   
+   
    // Initialize the solution using the specified initial condition and do
    // memory allocations.
    initializeAndAllocate();
@@ -2838,11 +2848,12 @@ void timeLoop()
    printf("\n\nMonitoring node is %d, with coordinates [%f, %f, %f]\n\n\n",
            monPoint, coord[monPoint][0], coord[monPoint][1], coord[monPoint][2]);
 
-   printf("Time step  Iter     Time       u_monitor     v_monitor     w_monitor     p_monitor\n");
-   printf("-----------------------------------------------------------------------------------\n");
+   printf("Time step  Iter     Time       u_monitor     v_monitor     w_monitor     p_monitor     TimeSpend      maxAcc \n");
+   printf("-------------------------------------------------------------------------------------------------------------\n");
 
 
    while (timeT < t_final) {  // Time loop
+      StartCurrentTimeStep = getHighResolutionTime(1, 1.0);   
       timeN = timeN + 1;
       timeT = timeT + dt;
      
@@ -3025,6 +3036,31 @@ void timeLoop()
       }  // End of iter loop
      
      
+      Start = getHighResolutionTime(1, 1.0);     
+      // Check if solution reachs steady state
+      #ifdef USECUDA
+         checkAccConvergence = checkConvergenceInTimeGPU();
+         cudaThreadSynchronize();
+      #else    
+         checkAccConvergence = 1;
+         
+         maxAcc = 0.00000;
+         for (int i = 0; i < 3*NN; i++) {
+            dummyAcc = (Unp1[i] - Un[i]) * oneOverdt;
+            if (abs(dummyAcc) > maxAcc) {
+               maxAcc = abs(dummyAcc);
+            }
+         }
+         
+         if (maxAcc > convergenceCriteria) {
+            checkAccConvergence = 0;
+         }         
+      #endif
+      
+      wallClockTime = getHighResolutionTime(2, Start);
+      if (PRINT_TIMES) printf("checkConvergenceSteadyState() took %6.3f seconds.\n", wallClockTime);
+     
+     
       // Get ready for the next time step
       #ifdef USECUDA
          cudaStatus = cudaMemcpy(Un_d, Unp1_d, 3*NN * sizeof(double), cudaMemcpyDeviceToDevice);   if(cudaStatus != cudaSuccess) { printf("Error52: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -3039,26 +3075,40 @@ void timeLoop()
             Pn[i] = Pnp1[i];
          }
       #endif
-     
-      if (timeN % 1000 == 0 || abs(timeT - t_final) < 1e-10) {
+      
+      
+      wallClockTimeCurrentTimeStep = getHighResolutionTime(2, StartCurrentTimeStep);      
+      
+      // Print monitor point data                                                                                                                    // TODO: If convergence is not achieved iter is written as iterMax+1, which is not correct.
+      #ifdef USECUDA
+         printMonitorDataGPU(iter);
+         cudaThreadSynchronize();
+      #else
+         printf("%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f %12.5f %12.5f\n",
+                timeN, iter, timeT, Un[monPoint],
+                Un[NN+monPoint], Un[2*NN+monPoint], Pn[monPoint], wallClockTimeCurrentTimeStep, maxAcc);
+      #endif      
+      
+      
+      if (checkAccConvergence == 1) {
          #ifdef USECUDA
             cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
             cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
             cudaThreadSynchronize();
          #endif
          createTecplot();
+         break;    
       }
-
-
-      // Print monitor point data                                                                                                                    // TODO: If convergence is not achieved iter is written as iterMax+1, which is not correct.
-      #ifdef USECUDA
-         printMonitorDataGPU(iter);
-         cudaThreadSynchronize();
-      #else
-         printf("%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n",
-                timeN, iter, timeT, Un[monPoint],
-                Un[NN+monPoint], Un[2*NN+monPoint], Pn[monPoint]);
-      #endif
+      else {
+            if (timeN % 1000 == 0 || abs(timeT - t_final) < 1e-10) {
+               #ifdef USECUDA
+                  cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error54: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+                  cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error55: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+                  cudaThreadSynchronize();
+               #endif
+               createTecplot();
+            }
+      }
       
       
    }  // End of while loop for time
@@ -4104,9 +4154,9 @@ void applyBC_Step3()
 
 
 
-//------------------------------------------------------------------------------
+//========================================================================
 void readRestartFile()
-//------------------------------------------------------------------------------
+//========================================================================
 {
    // Reads the restart file, which is a Tecplot DAT file
 

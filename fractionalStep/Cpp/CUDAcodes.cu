@@ -27,6 +27,12 @@
 #include <cusp/elementwise.h>
 
 
+#include <thrust/device_vector.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/transform_reduce.h>
+#include <thrust/functional.h>
+
+
 int NBLOCKS = 128;
 int NTHREADS = 1024;
 
@@ -36,16 +42,13 @@ int NTHREADS = 1024;
 
 
 using namespace std;
-
-#ifdef SINGLE
-  typedef float REAL;
-#else
-  typedef double REAL;
-#endif
+using namespace thrust;
 
 extern int NN, NNp, sparseM_NNZ, sparseG_NNZ, *sparseMrowStarts, *sparseGrowStarts, *sparseMrow, *sparseMcol, BCnVelNodes, zeroPressureNode, timeN, monPoint;
 extern int ** BCvelNodes;
 extern double dt, timeT, t_ini, tolerance, *sparseAvalue, *sparseKvalue, *UnpHalf_prev, *Pn, *R1, *R11, *R12, *R13, *R2, *Un, *UnpHalf, *KtimesAcc_prev, *Acc_prev, *Acc, *MdInv, *MdOrigInv, *Unp1, *Pnp1, *Pdot;
+extern double convergenceCriteria, maxAcc;
+extern double wallClockTimeCurrentTimeStep;
 extern char dummyUserInput;
 extern string whichProblem;
 
@@ -92,6 +95,27 @@ extern int *LtoGvel_1d_d;
 extern int *sparseMapM_1d_d;
 extern double *Sv_1d_d;
 extern double *gDSv_1d_d, *GQfactor_1d_d;
+
+struct weighted_absolute_difference // used at steady state convergence check 
+{
+  double oneOverdt;
+
+  weighted_absolute_difference(const double oneOverdt)
+    : oneOverdt(oneOverdt)
+  {}
+
+  __host__ __device__
+  double operator()(thrust::tuple<double,double> t)
+  {
+    double thrust_Unp1_d = thrust::get<0>(t);
+    double thrust_Un_d   = thrust::get<1>(t);
+    double accDummy;
+    
+    accDummy = (thrust_Unp1_d - thrust_Un_d) * oneOverdt;
+
+    return fabs(accDummy);
+  }
+};
 
 // double *UnGPU;
 
