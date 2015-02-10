@@ -83,6 +83,7 @@
 
 #define _CRT_SECURE_NO_DEPRECATE    // This is necessary to avoid fopen() warning of MSVC.
 int N_MKL_THREADS = 8;              // Number of Intel MKL threads
+int N_OPENMP_THREADS = 8;           // Number of openMP threads
 bool PRINT_TIMES = 1;               // Set to 1 to see the time taken by each step of the solver on the screen
 
 
@@ -102,6 +103,7 @@ bool PRINT_TIMES = 1;               // Set to 1 to see the time taken by each st
 #include "mkl_spblas.h"
 #include "mkl_service.h"
 #include <limits>
+#include <omp.h>
 
 //extern "C" void mkl_freebuffers();
 
@@ -370,7 +372,7 @@ void waitForUser(string);
    void step3GPU(int);
    void calculate_KtimesAcc_prevGPU();
    bool checkConvergenceGPU();
-   bool checkConvergenceInTimeGPU();   
+   bool checkConvergenceInTimeGPU();
    void printMonitorDataGPU(int);
  #endif
 
@@ -400,7 +402,9 @@ int main()
    // Set the thread number for MKL parallelization
    mkl_set_dynamic(0);
    mkl_set_num_threads(N_MKL_THREADS);
-
+   
+   // Set the thread number for openMP parallelization   
+   omp_set_num_threads(N_OPENMP_THREADS);
 
    
    double Start, Start1, wallClockTime;   // Used for run time measurement.
@@ -550,6 +554,7 @@ void readInputFile()
    inpFile.ignore(256, ':');    inpFile >> t_final;     inpFile.ignore(256, '\n');
    inpFile.ignore(256, ':');    inpFile >> maxIter;     inpFile.ignore(256, '\n');
    inpFile.ignore(256, ':');    inpFile >> tolerance;   inpFile.ignore(256, '\n');
+   inpFile.ignore(256, ':');    inpFile >> convergenceCriteria;   inpFile.ignore(256, '\n');     
    inpFile.ignore(256, ':');    inpFile >> isRestart;   inpFile.ignore(256, '\n');
    inpFile.ignore(256, ':');    inpFile >> density;     inpFile.ignore(256, '\n');
    inpFile.ignore(256, ':');    inpFile >> viscosity;   inpFile.ignore(256, '\n');
@@ -2817,7 +2822,6 @@ void timeLoop()
    
    double oneOverdt = 1.0000000000000000 / dt;
    double dummyAcc;
-   convergenceCriteria = 0.001;
    
    
    // Initialize the solution using the specified initial condition and do
@@ -3523,11 +3527,9 @@ void calculateMatrixA()
    int nnzM2 = 2 * nnzM;
    
    double *u0_nodal, *v0_nodal, *w0_nodal;
+   double *uPrev_nodal, *vPrev_nodal, *wPrev_nodal;
    double u0, v0, w0;
-   
-   u0_nodal = new double[NENv];
-   v0_nodal = new double[NENv];
-   w0_nodal = new double[NENv];
+   double *R1ue, *R1ve, *R1we; 
    
    double **Ae_11;
    double GQfactor;
@@ -3535,83 +3537,145 @@ void calculateMatrixA()
    for (int i = 0; i < sparseM_NNZ/3; i++){
       sparseAvalue[i] = 0.0;
    }
-
-   Ae_11 = new double*[NENv];
-   for (int i = 0; i < NENv; i++) {
-      Ae_11[i] = new double[NENv];
+   
+   for (int i = 0; i < NN; i++){
+      R11[i] = 0.0;
+      R12[i] = 0.0;
+      R13[i] = 0.0;
    }
-
-   // Calculate Ae and assemble it into A
-   for (int e = 0; e < NE; e++) {
-
-      for (int i = 0; i < NENv; i++) {
-         for (int j = 0; j < NENv; j++) {
-            Ae_11[i][j] = 0.0;
-         }
-      }
+   
+   int offsetElements = 0;   
+   
+   // Calculate Ae and assemble it into A   
+   for (int color = 0; color < nActiveColors; color++) {
+      
+      //cout << endl;
+      //cout << "offset_" << NmeshColors[color] << " = " << offsetElements << endl;
+      #pragma omp parallel private(Ae_11, R1ue, R1ve, R1we, u0, v0, w0, u0_nodal, v0_nodal, w0_nodal, uPrev_nodal, vPrev_nodal, wPrev_nodal, GQfactor) shared(NmeshColors, Sv, NENv, NGP, offsetElements)
+      {   
          
-      // Extract elemental u, v and w velocity values from the global solution
-      // solution array of the previous iteration.
-      int iG;
-      for (int i = 0; i<NENv; i++) {
-         iG = LtoGvel[e][i];
-         u0_nodal[i] = Un[iG];
-  
-         iG = LtoGvel[e][i + NENv];
-         v0_nodal[i] = Un[iG];
-      
-         iG = LtoGvel[e][i + 2*NENv];
-         w0_nodal[i] = Un[iG];
-      }
-
-      for (int k = 0; k < NGP; k++) {   // Gauss Quadrature loop
-         GQfactor = detJacob[e][k] * GQweight[k];
-
-         // Above calculated u0 and v0 values are at the nodes. However in GQ
-         // integration we need them at GQ points. Let's calculate them using
-         // interpolation based on shape functions.
-         u0 = 0.0;
-         v0 = 0.0;
-         w0 = 0.0;
-         for (int i = 0; i<NENv; i++) {
-            u0 = u0 + Sv[k][i] * u0_nodal[i];
-            v0 = v0 + Sv[k][i] * v0_nodal[i];
-            w0 = w0 + Sv[k][i] * w0_nodal[i];
-         }
-       
+         u0_nodal = new double[NENv];
+         v0_nodal = new double[NENv];
+         w0_nodal = new double[NENv];
+         
+         uPrev_nodal = new double[NENv];
+         vPrev_nodal = new double[NENv];
+         wPrev_nodal = new double[NENv];
+         
+         Ae_11 = new double*[NENv];
          for (int i = 0; i < NENv; i++) {
-            for (int j = 0; j < NENv; j++) {
-               Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][k][j][0] + v0 * gDSv[e][k][j][1] + w0 * gDSv[e][k][j][2]) * Sv[k][i] * GQfactor;
-            }
-         }       
-      } // GQ loop
-     
-      // if (e==0){
-         // for (int i = 0; i < NENv; i++) {
-            // for (int j = 0; j < NENv; j++) {
-               // cout << i << "  " << j << "  " << Ae_11[i][j] << endl;   // Assemble upper left sub-matrix of A
-            // }
-         // }         
-      // }
-      
-      
-      // Assemble Ae into sparse A.
-      for (int i = 0; i < NENv; i++) {
-         for (int j = 0; j < NENv; j++) {
-            sparseAvalue[sparseMapM[e][i][j]] += Ae_11[i][j];   // Assemble upper left sub-matrix of A
+            Ae_11[i] = new double[NENv];
          }
-      }
-   }  // End of element loop
+         
+         R1ue = new double[NENv];
+         R1ve = new double[NENv];
+         R1we = new double[NENv];                  
+         
+         #pragma omp for 
+            for (int eCount = 0; eCount < NmeshColors[color]; eCount++) {
+               
+               int e = elementsOfColor[offsetElements + eCount]; // Element that particular thread works on 
+               
+               for (int i = 0; i < NENv; i++) {
+                  for (int j = 0; j < NENv; j++) {
+                     Ae_11[i][j] = 0.0;
+                  }
+               }
+               
+               for (int i = 0; i<NENv; i++) {
+                  R1ue[i] = 0.0;
+                  R1ve[i] = 0.0;
+                  R1we[i] = 0.0;
+               }           
+               
+               // Extract elemental u, v and w velocity values from the global solution
+               // solution array of the previous iteration.
+               int iG;
+               for (int i = 0; i<NENv; i++) {
+                  iG = LtoGvel[e][i];
+                  u0_nodal[i] = Un[iG];
+                  uPrev_nodal[i] = UnpHalf_prev[iG];
+           
+                  iG = LtoGvel[e][i + NENv];
+                  v0_nodal[i] = Un[iG];
+                  vPrev_nodal[i] = UnpHalf_prev[iG];
+               
+                  iG = LtoGvel[e][i + 2*NENv];
+                  w0_nodal[i] = Un[iG];
+                  wPrev_nodal[i] = UnpHalf_prev[iG];
+               }
 
-
-   for (int i = 0; i < NENv; i++) {
-      delete[] Ae_11[i];
+               for (int k = 0; k < NGP; k++) {   // Gauss Quadrature loop
+                  //GQfactor = GQfactor_1d[e*NGP+k];
+                  GQfactor = detJacob[e][k] * GQweight[k];
+            
+                  // Above calculated u0 and v0 values are at the nodes. However in GQ
+                  // integration we need them at GQ points. Let's calculate them using
+                  // interpolation based on shape functions.
+                  u0 = 0.0;
+                  v0 = 0.0;
+                  w0 = 0.0;
+                  for (int i = 0; i<NENv; i++) {
+                     u0 = u0 + Sv[k][i] * u0_nodal[i];
+                     v0 = v0 + Sv[k][i] * v0_nodal[i];
+                     w0 = w0 + Sv[k][i] * w0_nodal[i];
+                  }
+                
+                  for (int i = 0; i < NENv; i++) {
+                     for (int j = 0; j < NENv; j++) {
+                        Ae_11[i][j] = Ae_11[i][j] + (u0 * gDSv[e][k][j][0] + v0 * gDSv[e][k][j][1] + w0 * gDSv[e][k][j][2]) * Sv[k][i] * GQfactor;
+                     }
+                  }       
+               } // GQ loop
+              
+               // if (e==0){
+                  // for (int i = 0; i < NENv; i++) {
+                     // for (int j = 0; j < NENv; j++) {
+                        // cout << i << "  " << j << "  " << Ae_11[i][j] << endl;   // Assemble upper left sub-matrix of A
+                     // }
+                  // }         
+               // }
+               
+               // Assemble R1e.
+               for (int i = 0; i < NENv; i++) {
+                  for (int j = 0; j < NENv; j++) {
+                     R1ue[i] += Ae_11[i][j] * uPrev_nodal[j];
+                     R1ve[i] += Ae_11[i][j] * vPrev_nodal[j];
+                     R1we[i] += Ae_11[i][j] * wPrev_nodal[j];
+                  }
+               }
+               
+               // Assemble R1e into R11, R12 and R13
+               for (int i = 0; i<NENv; i++) {
+                  iG = LtoGvel[e][i];
+                  
+                  R11[iG] -= R1ue[i];
+                  R12[iG] -= R1ve[i];
+                  R13[iG] -= R1we[i];
+               }
+               
+            } // End of element loop, end of #pragma for
+            
+         for (int i = 0; i < NENv; i++) {
+            delete[] Ae_11[i];
+         }
+         delete[] Ae_11; 
+         
+         delete[] u0_nodal;
+         delete[] v0_nodal;
+         delete[] w0_nodal;
+         delete[] uPrev_nodal;
+         delete[] vPrev_nodal;
+         delete[] wPrev_nodal;
+         delete[] R1ue;
+         delete[] R1ve;
+         delete[] R1we;                       
+            
+      } // End of #pragma parallel
+                                                                 
+      offsetElements += NmeshColors[color];
+      
    }
-   delete[] Ae_11;
-
-   delete[] u0_nodal;
-   delete[] v0_nodal;
-   delete[] w0_nodal;
 
    //  CONTROL
    //for (int i = 0; i < sparseM_NNZ/3; i++){
@@ -3638,10 +3702,8 @@ void step1(int iter)
       calculateMatrixAGPU();
       cudaThreadSynchronize();
    #else
-      if (iter == 1) {
-      // Calculate Ae and assemble into A. Do this only for the first iteration of each time step.
+      // Don't assemble A but calculate [A]*u at each iteration 
       calculateMatrixA();
-      }
    #endif
    wallClockTime = getHighResolutionTime(2, Start);
    if (PRINT_TIMES) printf("calculateMatrixA() took %6.3f seconds.\n", wallClockTime); 
@@ -3680,7 +3742,7 @@ void step1(int iter)
          UnpHalf_prev3[i] = UnpHalf_prev[i + 2*NN];
       }
 
-      beta = 0.0;
+      beta = 1.0;
       mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev1, &beta, R11);   // This contributes to (- K * UnpHalf_prev)  part of R1
       mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev2, &beta, R12);   // This contributes to (- K * UnpHalf_prev)  part of R2
       mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseKvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev3, &beta, R13);   // This contributes to (- K * UnpHalf_prev)  part of R3
@@ -3689,12 +3751,6 @@ void step1(int iter)
       //for (int i = 0; i < NN; i++) {
       //   cout << i << "   " << R11[i] << endl;
       //}
-   
-      beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev1, &beta, R11);   // This contributes to (- A * UnpHalf_prev)  part of R1
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev2, &beta, R12);   // This contributes to (- A * UnpHalf_prev)  part of R2   
-      mkl_dcsrmv(&transa, &m, &m, &alpha, matdescra, sparseAvalue, sparseMcol, sparseMrowStarts, sparseMrowStartsMod, UnpHalf_prev3, &beta, R13);   // This contributes to (- A * UnpHalf_prev)  part of R3
-
 
       beta = 1.0;   // To add R11, R12, R13 to the previosuly calculated ones.
       mkl_dcsrmv(&transa, &m, &k, &alpha, matdescra, sparseG1value, sparseGcol, sparseGrowStarts, sparseGrowStartsMod, Pn, &beta, R11);             // This contributes to (- G * Pn)  part of R1
@@ -3958,7 +4014,7 @@ void MKL_CG_solver(int iter)
    ipar[7] = 1;       // Perform iteration number based stopping check. Default is 1.
    ipar[8] = 1;       // Perform residual based stopping check. Default is 0.
    ipar[9] = 0;       // Do not perform user specified stopping check. Default is 1.
-   ipar[10] = 1;      // Perform Jacobi Preconditioner   
+   ipar[10] = 1;      // Perform Jacobi Preconditioner
    dpar[0] = 1e-12;   // Relative tolerance. Default is 1e-6.
 
    int solverIter;
