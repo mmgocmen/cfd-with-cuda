@@ -1,0 +1,10 @@
+#!/bin/bash
+
+nvcc -O2 -arch=sm_13 -DCUSP -o poissonCUSP poissonSolver.cpp CUSPsolver.cu
+
+nvcc -O2 -arch=sm_13 -DCUSPARSE -o poissonCUSPARSE poissonSolver.cpp CUSPARSEsolver.cu -I$CULASPARSE_INC_PATH -lcublas -lcusparse
+
+nvcc -O2 -arch=sm_13 -DCULA -o poissonCULA poissonSolver.cpp CULAsolver.cu -L$CULASPARSE_LIB_PATH_64 -I$CULASPARSE_INC_PATH -lcula_core -lcula_sparse -lcolamd -lcublas -lcudart -lcusparse
+
+icc -O2 -DMKLCG -mkl=sequential -o poissonMKLCG poissonSolver.cpp MKLCGsolver.cpp
+
