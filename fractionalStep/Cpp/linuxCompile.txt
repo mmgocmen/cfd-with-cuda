@@ -9,17 +9,18 @@ CPU:       icc -O2 -mkl=parallel -o solverCPU -I../../CSparse/Include/ SourceFil
 
            g++ -O2 -o solverCPU -I../../CSparse/Include/ -I/opt/intel/mkl/include
            SourceFiles/blascoCodinaHuerta.cpp
-           -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 ../../CSparse/Lib/libcsparse.a
-          -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5
+           -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 
+		   ../../CSparse/Lib/libcsparse.a
+          -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -fopenmp
 
 GPU:       nvcc -O2 -arch=sm_20 -o solverGPU -DUSECUDA -I../../CSparse/Include/ -I/opt/intel/mkl/include
            SourceFiles/blascoCodinaHuerta.cpp SourceFiles/CUDAcodes.cu
            -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 ../../CSparse/Lib/libcsparse.a
-           -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse
+           -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -Xcompiler -fopenmp
 
 GPU with debug and line info:
            nvcc -G -lineinfo -arch=sm_20 -o solverGPU -DUSECUDA -I../../CSparse/Include/ -I/opt/intel/mkl/include
            SourceFiles/blascoCodinaHuerta.cpp SourceFiles/CUDAcodes.cu
            -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 ../../CSparse/Lib/libcsparse.a
-           -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse
+           -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -Xcompiler -fopenmp
 
