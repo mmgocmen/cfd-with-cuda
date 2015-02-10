@@ -111,7 +111,7 @@ struct weighted_absolute_difference // used at steady state convergence check
     double thrust_Un_d   = thrust::get<1>(t);
     double accDummy;
     
-    accDummy = (thrust_Unp1_d - thrust_Un_d) * oneOverdt;
+    accDummy = thrust_Unp1_d - thrust_Un_d;
 
     return fabs(accDummy);
   }
@@ -182,7 +182,7 @@ void initializeAndAllocateGPU()
    int NNZG = sparseG_NNZ / 3;
 
    cudaStatus = cudaMalloc((void**)&K_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error01: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
-   // cudaStatus = cudaMalloc((void**)&A_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error02: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
+   //cudaStatus = cudaMalloc((void**)&A_d,              NNZM   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error02: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&G1_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error03: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&G2_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error04: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMalloc((void**)&G3_d,             NNZG   * sizeof(double));   if(cudaStatus != cudaSuccess) { printf("Error05: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
@@ -430,8 +430,8 @@ void CUSP_CG_solver()
    DeviceValueArrayView soln_d (wrapped_Pdot_d, wrapped_Pdot_d + NNp);  
    
    // Set monitor
-   cusp::default_monitor<double> monitor(RHS_d, 1000, 1e-12);
-   //cusp::verbose_monitor<real2> monitor(b, solverIterMax, solverTol);
+   cusp::default_monitor<double> monitor(RHS_d, 1000, 1e-6);
+   //cusp::verbose_monitor<double> monitor(RHS_d, 1000, 1e-12);
 
    // Set preconditioner
    cusp::precond::diagonal<double, cusp::device_memory> M(Z_CUSP_CSR_d);
@@ -720,16 +720,16 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
    
    __shared__ double s_R1e[3*NENv_SIZE];
    
-   int tid = threadIdx.x;
-   int bid = blockIdx.x;
-   int ebid = elementsOfColor[offsetElements + bid];
+   const int tid = threadIdx.x;
+   const int bid = blockIdx.x;
+   const int ebid = elementsOfColor[offsetElements + bid];
 
    // Extract elemental u, v and w velocity values from the global
    // solution array of the previous iteration.
    if (tid < NENv) {
       const int iLtoGu = LtoGvel[tid + ebid*NENv*3];
       const int iLtoGv = LtoGvel[tid + ebid*NENv*3 + NENv];
-      const int iLtoGw = LtoGvel[tid + ebid*NENv*3 + NENv*2];
+      const int iLtoGw = LtoGvel[tid + ebid*NENv*3 + NENv*2];       
       s_u[tid] = U[iLtoGu];
       s_v[tid] = U[iLtoGv];
       s_w[tid] = U[iLtoGw];
@@ -804,9 +804,7 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
       s_R1e[tid]        = 0.00000;
       s_R1e[tid+NENv]   = 0.00000;
       s_R1e[tid+2*NENv] = 0.00000;
-   }              
-   
-   __syncthreads();
+   }
    
 
 	if (tid < NGP) {
@@ -843,9 +841,7 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
          //}
       //}
    //}
-   ////===========================================     
-   
-   __syncthreads();   
+   ////===========================================  
    
      
    // Calculate elemental stiffnes matrix   
@@ -868,9 +864,7 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
          }
       }
       
-   }    
-    
-   __syncthreads();
+   }
    
 
    // Calculate elemental R1 (right hand side vector), R1e
@@ -883,15 +877,14 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
       }
    }
    
-   if (tid < NENv) {
+   if (tid < NENv) { 
       const int iLtoGu = LtoGvel[tid + ebid*NENv*3];
       const int iLtoGv = LtoGvel[tid + ebid*NENv*3 + NENv];
-      const int iLtoGw = LtoGvel[tid + ebid*NENv*3 + NENv*2];   
-      R1[iLtoGu] += -1.00000*s_R1e[tid];    
-      R1[iLtoGv] += -1.00000*s_R1e[tid+NENv];     
-      R1[iLtoGw] += -1.00000*s_R1e[tid+2*NENv]; 
+      const int iLtoGw = LtoGvel[tid + ebid*NENv*3 + NENv*2];
+      R1[iLtoGu] -= s_R1e[tid];    
+      R1[iLtoGv] -= s_R1e[tid+NENv];     
+      R1[iLtoGw] -= s_R1e[tid+2*NENv]; 
    }   
-   
    
    
    //if (ebid == 0) {
@@ -903,7 +896,7 @@ __global__ void calcAndAssembleMatrixA(int NE, int NENv, int NGP, int NN, int of
       //}
    //}
    
-}  // End of function calcAndAssembleMatrixA()   
+}  // End of function calcAndAssembleMatrixA()  
 
 
 
@@ -943,7 +936,7 @@ void calculateMatrixAGPU()
       
    }
    
-}  // End of function calculateMatrixAGPU() 
+}  // End of function calculateMatrixAGPU()
 
 
 
@@ -1146,7 +1139,43 @@ void printMonitorDataGPU(int iter)
    cudaStatus = cudaMemcpy(Un, Un_d, 3*NN * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error110: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
    cudaStatus = cudaMemcpy(Pn, Pn_d, NNp  * sizeof(double), cudaMemcpyDeviceToHost);   if(cudaStatus != cudaSuccess) { printf("Error111: %s\n", cudaGetErrorString(cudaStatus)); cin >> dummyUserInput; }
 
-   printf("%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f\n", timeN, iter, timeT, Un[monPoint], Un[monPoint + NN], Un[monPoint + 2*NN], Pn[monPoint]);
+   printf("%6d  %6d  %10.5f  %12.5f  %12.5f  %12.5f  %12.5f  %12.5f  %12.5f\n", 
+          timeN, iter, timeT, Un[monPoint], Un[monPoint + NN], Un[monPoint + 2*NN], Pn[monPoint],  wallClockTimeCurrentTimeStep, maxAcc);
 }  // End of function printMonitorDataGPU()
+
+
+
+
+
+//========================================================================
+bool checkConvergenceInTimeGPU(void)
+//========================================================================
+{
+   double oneOverdt = 1.0000000000000000 / dt;
+   
+   // wrap raw pointer with a device_ptr 
+   thrust::device_ptr<double> thrust_Un_dbeg(Un_d);
+   thrust::device_ptr<double> thrust_Un_dend = thrust_Un_dbeg + 3*NN;
+     
+   thrust::device_ptr<double> thrust_Unp1_dbeg(Unp1_d);
+   thrust::device_ptr<double> thrust_Unp1_dend = thrust_Unp1_dbeg + 3*NN;
+   
+   // do the reduction
+   maxAcc = transform_reduce(make_zip_iterator(make_tuple(thrust_Unp1_dbeg, thrust_Un_dbeg)),
+                             make_zip_iterator(make_tuple(thrust_Unp1_dend, thrust_Un_dend)),
+                             weighted_absolute_difference(oneOverdt),
+                             -1.f,
+                             maximum<double>());
+   
+
+   // Check convergence
+   if (maxAcc > convergenceCriteria) {
+      return 0;
+   } else {
+      return 1;      
+   }
+
+}  // End of function checkConvergenceInTimeGPU()
+
 
 #endif //USECUDA
