@@ -5,7 +5,7 @@ A finite element based flow solver using [CUDA](http://www.nvidia.com/cuda).
 
 To get a copy of the source codes visit Checkout page under the Source tab.
 
-This Google Code project is created on March 2012.
+This Google Code project is created on March 2012 and exported to GitHub on April 2015.
 
 A M.Sc. Thesis is completed using the codes provided under "fractionalStep" folder. Thesis topic is "Parallel Implementation of the Finite Element Method on Grahics Processors for the Solution of Incompressible Flows". This thesis study can be found at the link given below; 
 
