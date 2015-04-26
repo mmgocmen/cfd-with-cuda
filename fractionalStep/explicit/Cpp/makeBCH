@@ -1,0 +1,31 @@
+# Make file for explicit fractional step solver (developed by Blasco, Codina and Huerta)
+
+# "parallel" determines the code will work either on CPU or GPU. 
+
+# Make proper changes for the location of source files and the CSparse directory
+
+
+CC=nvcc
+
+CFLAGS=-O2
+
+sourceMain=SourceFiles/blascoCodinaHuerta.cpp
+
+sourceCUDA=SourceFiles/CUDAcodes.cu
+
+ifeq ($(parallel),gpu)
+exeNAME=solverGPU
+endif
+
+ifeq ($(parallel),cpu)
+exeNAME=solverCPU
+endif
+
+all:
+ifeq ($(parallel),gpu)
+	$(CC) $(CFLAGS) -arch=sm_20 -o $(exeNAME) -DUSECUDA $(sourceMain) $(sourceCUDA) -I../../CSparse/Include/ ../../CSparse/Lib/libcsparse.a -I/opt/intel/mkl/include -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -I/home/mahmut/Paralution/paralution-1.0.0/build/inc -L/home/mahmut/Paralution/paralution-1.0.0/build/lib/ -lparalution -Xcompiler -fopenmp
+endif
+   
+ifeq ($(parallel),cpu)
+	$(CC) $(CFLAGS) -arch=sm_20 -o $(exeNAME) $(sourceMain) -I../../CSparse/Include/ ../../CSparse/Lib/libcsparse.a -I/opt/intel/mkl/include -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -I/home/mahmut/Paralution/paralution-1.0.0/build/inc -L/home/mahmut/Paralution/paralution-1.0.0/build/lib/ -lparalution -Xcompiler -fopenmp
+endif

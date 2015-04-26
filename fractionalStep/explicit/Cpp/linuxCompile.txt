@@ -23,3 +23,8 @@ GPU with debug and line info:
            -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 ../../CSparse/Lib/libcsparse.a
            -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -Xcompiler -fopenmp
 
+===================
+Make File
+===================
+CPU:  make -f makeBCH parallel=cpu
+GPU:  make -f makeBCH parallel=gpu

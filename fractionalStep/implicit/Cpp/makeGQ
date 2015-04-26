@@ -1,0 +1,31 @@
+# Make file for implicit fractional step solver (developed by Guermond and Quartapelle)
+
+# "parallel" determines the code will work either on CPU or GPU. 
+
+# Make proper changes for the location of source files and the Paralution directory
+
+
+CC=nvcc
+
+CFLAGS=-O2
+
+sourceMain=SourceFiles/guermondQuartapelle.cpp
+
+sourceCUDA=SourceFiles/CUDAcodes.cu
+
+ifeq ($(parallel),gpu)
+exeNAME=solverGPU
+endif
+
+ifeq ($(parallel),cpu)
+exeNAME=solverCPU
+endif
+
+all:
+ifeq ($(parallel),gpu)
+	$(CC) $(CFLAGS) -arch=sm_20 -o $(exeNAME) -DUSECUDA $(sourceMain) $(sourceCUDA) -I/opt/intel/mkl/include -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -I/home/userName/Paralution/paralution-1.0.0/build/inc -L/home/userName/Paralution/paralution-1.0.0/build/lib/ -lparalution -Xcompiler -fopenmp
+endif
+   
+ifeq ($(parallel),cpu)
+	$(CC) $(CFLAGS) -arch=sm_20 -o $(exeNAME) $(sourceMain) -I/opt/intel/mkl/include -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -I/home/userName/Paralution/paralution-1.0.0/build/inc -L/home/userName/Paralution/paralution-1.0.0/build/lib/ -lparalution -Xcompiler -fopenmp
+endif

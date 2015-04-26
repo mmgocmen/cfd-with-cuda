@@ -1,0 +1,31 @@
+Make proper changes for the location of source files and the Paralution directory
+
+
+===================
+PCG version
+===================
+
+CPU:       icc -O2 -mkl=parallel -o solverCPU SourceFiles/guermondQuartapelle.cpp -fopenmp
+           -I/home/userName/Paralution/paralution-1.0.0/build/inc -L/home/userName/Paralution/paralution-1.0.0/build/lib/ -lparalution
+
+           g++ -O2 -o solverCPU -I/opt/intel/mkl/include -I/home/userName/Paralution/paralution-1.0.0/build/inc
+           SourceFiles/guermondQuartapelle.cpp
+           -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -L/home/userName/Paralution/paralution-1.0.0/build/lib/
+          -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -fopenmp -lparalution
+
+GPU:       nvcc -O2 -arch=sm_20 -o solverGPU -DUSECUDA -I/opt/intel/mkl/include -I/home/userName/Paralution/paralution-1.0.0/build/inc
+           SourceFiles/guermondQuartapelle.cpp SourceFiles/CUDAcodes.cu
+           -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -L/home/userName/Paralution/paralution-1.0.0/build/lib/
+           -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -Xcompiler -fopenmp -lparalution
+
+GPU with debug and line info:
+           nvcc -G -lineinfo -arch=sm_20 -o solverGPU -DUSECUDA -I/opt/intel/mkl/include -I/home/userName/Paralution/paralution-1.0.0/build/inc
+           SourceFiles/guermondQuartapelle.cpp SourceFiles/CUDAcodes.cu
+           -L/opt/intel/lib/intel64 -L/opt/intel/mkl/lib/intel64 -L/home/userName/Paralution/paralution-1.0.0/build/lib/
+           -lmkl_intel_lp64 -lmkl_intel_thread -lmkl_core -liomp5 -lcolamd -lcublas -lcudart -lcusparse -Xcompiler -fopenmp -lparalution
+           
+===================
+Make File
+===================
+CPU:  make -f makeGQ parallel=cpu
+GPU:  make -f makeGQ parallel=gpu           
